@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite
+.env
+.env.*
+.venv/
+data/
+dist/
+build/
+.coverage
+.mypy_cache/
+.ruff_cache/
+.cache/
+*.log

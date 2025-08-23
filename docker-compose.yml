@@ -1,0 +1,27 @@
+version: "3.9"
+services:
+  nats:
+    image: nats:2.10
+    ports: ["4222:4222"]
+  pyracing_core:
+    build: .
+    environment:
+      NATS_URL: nats://nats:4222
+    depends_on: [nats]
+  mcp_service:
+    build:
+      context: .
+      dockerfile: mcp/Dockerfile
+    environment:
+      NATS_URL: nats://nats:4222
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    depends_on: [nats, pyracing_core]
+  director_agent:
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
+    environment:
+      MCP_ENDPOINT: http://mcp_service:8000  # if you add HTTP health
+      NATS_URL: nats://nats:4222
+      YT_API_KEY: ${YT_API_KEY}
+    depends_on: [mcp_service]

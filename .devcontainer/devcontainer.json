@@ -1,0 +1,47 @@
+{
+  "name": "sim-racecenter-agent",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/common-utils:2": {},
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.mypy-type-checker",
+        "ms-python.black-formatter",
+        "charliermarsh.ruff",
+        "ms-azuretools.vscode-docker",
+        "GitHub.copilot",
+        "bierner.markdown-mermaid"
+      ],
+      "settings": {
+        "python.testing.pytestEnabled": true,
+        "python.analysis.typeCheckingMode": "basic",
+        "editor.formatOnSave": true,
+        "python.formatting.provider": "none",
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff"
+        },
+        "ruff.format.args": ["--line-length","100"]
+      }
+    }
+  },
+  "containerEnv": {
+    "PYTHONUNBUFFERED": "1",
+    "SQLITE_PATH": "/workspace/data/agent.db",
+    "NATS_URL": "nats://nats:4222"
+  },
+  "mounts": [
+    "source=sr_agent_data,target=/workspace/data,type=volume"
+  ],
+  "postCreateCommand": "pip install --no-cache-dir -e .[dev] && pre-commit install",
+  "remoteUser": "vscode"
+}
