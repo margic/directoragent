@@ -1,0 +1,42 @@
+Metadata-Version: 2.4
+Name: sim-racecenter-agent
+Version: 0.1.0
+Summary: MCP + Director Agent layer for Sim RaceCenter
+Author-email: Sim RaceCenter <you@example.com>
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: pydantic>=2.7
+Requires-Dist: anyio>=4.3
+Requires-Dist: asgiref>=3.8.0
+Requires-Dist: click>=8.1
+Requires-Dist: uvicorn>=0.30
+Requires-Dist: fastapi>=0.111
+Requires-Dist: nats-py>=2.6
+Requires-Dist: sqlalchemy>=2.0
+Requires-Dist: aiosqlite>=0.20
+Requires-Dist: numpy>=1.26
+Requires-Dist: scikit-learn>=1.4
+Requires-Dist: orjson>=3.10
+Requires-Dist: python-dotenv>=1.0
+Requires-Dist: tenacity>=8.2
+Requires-Dist: httpx>=0.27
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: pytest-asyncio; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: isort; extra == "dev"
+Requires-Dist: pre-commit; extra == "dev"
+Requires-Dist: types-click; extra == "dev"
+Requires-Dist: types-orjson; extra == "dev"
+
+# Sim RaceCenter Agent
+
+Agent + MCP layer for Sim RaceCenter: exposes race domain data (via NATS JetStream + SQLite) to LLM tooling and powers a Director chat responder.
+
+## Quick Start (Dev Container)
+
+1. Clone repo and open in VS Code
+2. Reopen in container when prompted
+3. Initialize DB:

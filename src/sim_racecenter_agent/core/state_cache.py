@@ -1,26 +1,30 @@
 from __future__ import annotations
+
 import time
 from collections import deque
-from typing import Deque, List, Dict, Any
-from .models import LeaderboardEntry, Incident, Event, SessionMeta
+
+from .models import Event, Incident, LeaderboardEntry, SessionMeta
+
 
 class StateCache:
     def __init__(self, max_positions_history: int, incident_ring_size: int):
-        self._leaderboard: list[LeaderboardEntry] = []
-        self._positions_history: Deque[dict] = deque(maxlen=max_positions_history)
-        self._incidents: Deque[Incident] = deque(maxlen=incident_ring_size)
-        self._events: Deque[Event] = deque(maxlen=200)
-        self.session_meta: SessionMeta | None = None
-        self.versions: dict[str, int] = {"positions": 0, "incidents": 0, "events": 0}
+        self._leaderboard = []
+        self._positions_history = deque(maxlen=max_positions_history)
+        self._incidents = deque(maxlen=incident_ring_size)
+        self._events = deque(maxlen=200)
+        self.session_meta = None
+        self.versions = {"positions": 0, "incidents": 0, "events": 0}
+        # Latest per-driver proximity telemetry frames (current publisher subset)
+        self._telemetry = {}
+        self._roster = []  # last session snapshot drivers list
 
     # ---- Mutators (called by ingestion layer) ----
     def update_leaderboard(self, entries: list[LeaderboardEntry]):
         self._leaderboard = entries
         self.versions["positions"] += 1
-        self._positions_history.append({
-            "t": time.time(),
-            "entries": [(e.car, e.pos) for e in entries[:10]]
-        })
+        self._positions_history.append(
+            {"t": time.time(), "entries": [(e.car, e.pos) for e in entries[:10]]}
+        )
 
     def add_incident(self, incident: Incident):
         self._incidents.append(incident)
@@ -32,6 +36,29 @@ class StateCache:
 
     def set_session_meta(self, meta: SessionMeta):
         self.session_meta = meta
+
+    # Telemetry / roster (increment 0.1a)
+    def upsert_telemetry_frame(self, frame: dict):
+        """Store latest telemetry subset for a driver.
+
+        Expected keys (if present): driver_id, display_name, CarNumber, CarDistAhead,
+        CarDistBehind, CarNumberAhead, CarNumberBehind, _emulator.
+        """
+        did = frame.get("driver_id")
+        if not did:
+            return
+        frame["updated_at"] = time.time()
+        self._telemetry[did] = frame
+
+    def update_roster(self, drivers: list[dict]):
+        self._roster = drivers
+
+    # ---- Accessors (increment 0.1a) ----
+    def roster(self) -> list[dict]:
+        return list(self._roster)
+
+    def telemetry_frames(self) -> list[dict]:
+        return list(self._telemetry.values())
 
     # ---- Accessors for tools ----
     def snapshot_leaderboard(self) -> list[dict]:

@@ -257,3 +257,87 @@ Must include:
 
 ---
 End of Spec (v0.1)
+
+---
+
+## 21. Increment 0.1a – Workable Initial Use Case (Current Publisher Data Only)
+
+This incremental slice narrows scope to ONLY the data fields verifiably published today by the existing `pyracing` publisher / emulator: per‑driver telemetry frames with proximity distances and periodic session driver roster snapshots. It defers richer leaderboard / incident / event streams until publisher enhancements land.
+
+### 21.1 Available Data (Confirmed)
+From `iracing.telemetry` (per driver frame, subset):
+- `driver_id`, `display_name`, `CarIdx`, `CarNumber`
+- `CarDistAhead`, `CarDistBehind` (meters to nearest car ahead/behind if known)
+- `CarNumberAhead`, `CarNumberBehind` (string car numbers of those nearest cars)
+- Optional `_emulator` flag (set by telemetry emulator)
+
+From `iracing.session` (periodic snapshot):
+- `drivers`: list of `{ driver_id, display_name, CarNumber }`
+- `timestamp`
+- Optional `_emulator` flag
+
+Not yet available (and therefore out of scope in 0.1a answers): authoritative race order / positions, interval gaps in seconds, pit stop counts, incidents, events, lap numbers, session flag state.
+
+### 21.2 Adjusted MVP Tooling
+Maintain existing `get_live_snapshot` (stub) but add a NEW tool focused on current value:
+
+1. `get_current_battle` (NEW)
+    - Input: `{ "top_n_pairs"?: int=1, "max_distance_m"?: float=50.0 }`
+    - Logic: Aggregate latest telemetry per driver, extract candidate proximity pairs from (CarDistAhead, CarNumberAhead) and (CarDistBehind, CarNumberBehind). Normalize unordered pairs, keep minimal distance for duplicates, filter where `distance_m <= max_distance_m`, sort ascending, return top N.
+    - Output:
+       ```json
+       {
+          "schema_version": 1,
+          "generated_at": "2025-08-23T12:34:56Z",
+          "pairs": [
+             {
+                "focus_car": "11",
+                "other_car": "22",
+                "distance_m": 8.4,
+                "relation": "ahead",        
+                "driver": "Driver A",
+                "other_driver": "Driver B"
+             }
+          ],
+          "roster_size": 5,
+          "emulator": true
+       }
+       ```
+    - Notes: If no qualifying pairs, return empty `pairs` array.
+
+2. (Optional minor enhancement) `get_live_snapshot` MAY include `roster_size` and a truncated `drivers` list (first N) using session snapshot roster, but SHOULD NOT claim authoritative ordering.
+
+### 21.3 State Cache Additions
+- Add a telemetry map: `latest_by_driver: dict[str, TelemetryFrame]` where `TelemetryFrame` stores only needed keys (driver_id, display_name, CarNumber, CarDistAhead, CarDistBehind, CarNumberAhead, CarNumberBehind, updated_at, emulator: bool).
+- Provide accessor used by `get_current_battle`.
+
+### 21.4 Director Agent – Incremental Intents
+Supported intents in 0.1a:
+- `LEADER` (temporarily reinterpreted as *roster lead / first listed driver*): Answer with first driver from session roster (or "No drivers yet").
+- `BATTLE` (NEW): Triggers `get_current_battle(top_n_pairs=1)`. Answer formats:
+   - If battle: `Closest battle: Car 11 vs 22 – 8.4m gap.` (Include driver names if <200 chars.)
+   - If none: `No close battles (<50m) among N cars.`
+
+Intent keyword additions: `battle`, `close`, `who's close`, `closest`. (Add to classifier heuristic.)
+
+### 21.5 Answer Constraints
+- Global limit: 200 characters.
+- Distances: retain one decimal (round half up). Meter unit implied; append `m`.
+- Do not invent gaps in seconds (until numeric speed / interval data available).
+
+### 21.6 Acceptance Criteria (Increment 0.1a)
+| ID | Criterion |
+|----|-----------|
+| A1 | Subscribing adapter ingests `iracing.telemetry` & updates per-driver cache. |
+| A2 | Subscribing adapter ingests `iracing.session` & updates roster cache. |
+| A3 | `get_current_battle` tool callable via MCP; returns deterministic pair ordering for synthetic inputs. |
+| A4 | Director returns valid battle answer when a pair distance < 50m exists; otherwise fallback message. |
+| A5 | All tool responses include `schema_version` & ISO8601 `generated_at`. |
+| A6 | Answers never exceed 200 chars (truncate gracefully if needed). |
+| A7 | Emulator frames flagged -> tool sets `emulator: true` when any included pair came from emulator data OR all frames currently emulator. |
+| A8 | Empty telemetry state yields clear, non-error responses (no exceptions). |
+
+### 21.7 Future Step After 0.1a
+Next planned enhancement (0.1b) once publisher supplies standings snapshot: introduce true `leaderboard` tool (or upgrade `get_live_snapshot`) with ordered positions + gap seconds, enabling restoration of original LEADER / GAP intent semantics, then layer incidents/events ingestion.
+
+---

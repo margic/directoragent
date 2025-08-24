@@ -1,7 +1,8 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import List, Dict, Optional
-from datetime import datetime
+from typing import Optional
+
 
 @dataclass
 class LeaderboardEntry:
@@ -13,6 +14,7 @@ class LeaderboardEntry:
     last_lap: float | None = None
     pit_stops: int | None = None
 
+
 @dataclass
 class Incident:
     id: str
@@ -23,12 +25,14 @@ class Incident:
     severity: int
     timestamp: float
 
+
 @dataclass
 class Event:
     id: str
     kind: str
     timestamp: float
     data: dict
+
 
 @dataclass
 class SessionMeta:

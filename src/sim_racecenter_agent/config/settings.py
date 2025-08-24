@@ -1,6 +1,9 @@
 from __future__ import annotations
+
 import os
+
 from pydantic import BaseModel, Field
+
 
 class Settings(BaseModel):
     nats_url: str = Field(default="nats://nats:4222")
@@ -11,6 +14,7 @@ class Settings(BaseModel):
     mcp_stdio_only: bool = Field(default=False)
     snapshot_pos_history: int = Field(default=900)
     incident_ring_size: int = Field(default=300)
+
 
 def get_settings() -> Settings:
     return Settings(

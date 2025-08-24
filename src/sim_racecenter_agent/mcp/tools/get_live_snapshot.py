@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 import time
-from typing import Any
+
 from ...core.state_cache import StateCache
+
 
 def build_get_live_snapshot_tool(cache: StateCache):
     def handler(args: dict) -> dict:
@@ -16,10 +18,11 @@ def build_get_live_snapshot_tool(cache: StateCache):
             "leaderboard": cache.snapshot_leaderboard(),
             "versions": cache.versions,
         }
+
     return {
         "name": "get_live_snapshot",
         "description": "Return current session + leaderboard snapshot",
         "input_schema": {"type": "object", "properties": {}},
         "output_schema": {"type": "object"},
-        "handler": handler
+        "handler": handler,
     }
