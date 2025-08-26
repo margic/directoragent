@@ -1,5 +1,4 @@
 import pytest
-
 from sim_racecenter_agent.director.agent import DirectorAgent
 
 
@@ -19,6 +18,15 @@ class DummyAgent(DirectorAgent):
 async def test_battle_answer():
     ag = DummyAgent()
     ag.set_tool(
+        "get_live_snapshot",
+        {
+            "standings_top": [
+                {"car_idx": 1, "pos": 1, "gap_ahead_s": 0, "gap_leader_s": 0},
+                {"car_idx": 2, "pos": 2, "gap_ahead_s": 0.5, "gap_leader_s": 0.5},
+            ]
+        },
+    )
+    ag.set_tool(
         "get_current_battle",
         {
             "pairs": [{"focus_car": "11", "other_car": "22", "distance_m": 8.44}],
@@ -34,6 +42,10 @@ async def test_battle_answer():
 @pytest.mark.asyncio
 async def test_battle_no_pairs():
     ag = DummyAgent()
+    ag.set_tool(
+        "get_live_snapshot",
+        {"standings_top": [{"car_idx": 1, "pos": 1, "gap_ahead_s": 0, "gap_leader_s": 0}]},
+    )
     ag.set_tool("get_current_battle", {"pairs": [], "max_distance_m": 50, "roster_size": 3})
     resp = await ag.answer("closest battle?")
-    assert resp is not None and resp.startswith("No close battles")
+    assert resp is not None and resp.startswith("No close on-track battles")

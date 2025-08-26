@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pyracing.dev/schemas/system.control.result.schema.json",
+  "title": "System Control Result",
+  "type": "object",
+  "required": ["command_id", "success", "type"],
+  "properties": {
+    "command_id": {"type": "string", "format": "uuid"},
+    "success": {"type": "boolean"},
+    "type": {"type": "string"},
+    "data": {"type": ["object", "null"]},
+    "error": {"type": ["string", "null"]}
+  },
+  "additionalProperties": false
+}

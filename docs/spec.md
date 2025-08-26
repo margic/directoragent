@@ -28,8 +28,8 @@ This repository focuses on the agent & MCP layer (NOT raw telemetry ingestion—
 - core.state_cache: In-memory rolling caches (leaderboard, incidents, events, position history).
 - persistence.sqlite: Thin wrapper for SQLite (documents, embeddings, incidents_flat, driver_stats, summaries, answers_log, faq_pairs).
 - embeddings.worker: Asynchronous embedding queue + in-memory vector index.
-- mcp.server: JSON-RPC (MCP) with tool + resource registries.
-- mcp.tools: Tool handlers (get_live_snapshot, summarize_recent_events, search_corpus, driver_card, describe_gap, predict_pit_window (stub), propose_penalty (stub)).
+ - mcp.sdk_server: FastMCP-based official MCP SDK entrypoint (stdio + optional streamable HTTP).
+ - mcp.tools: Tool handlers (get_live_snapshot, search_corpus, get_current_battle, search_chat, get_fastest_practice, get_roster, get_session_history).
 - director.chat_listener: Consumes chat events (from existing YouTube integration or future adapter).
 - director.agent: Intent classification + tool invocation + answer assembly + (optional) moderation flow.
 - config: Settings loading (env + .env) with pydantic models.
@@ -44,8 +44,10 @@ This repository focuses on the agent & MCP layer (NOT raw telemetry ingestion—
 | Events (fastlap, battle)| JetStream (RACE.EVENTS)    | Deque (200 recent)              | 30–60 min |
 | Session lifecycle       | JetStream (RACE.SESSION)   | Current session context          | Archive final summary |
 | Summaries (partial)     | JetStream (RACE.SUMMARIES) | Keep last 10 + SQLite summaries  | Full session |
+-------------------+           +--------------------+
 | Driver stats            | Computed post-session      | SQLite driver_stats              | Cumulative |
 | Transcripts / docs      | External ingestion (future)| SQLite documents + embeddings    | All |
+-------------------+           |  - FastMCP Server  |
 | Rules/FAQ               | Seed files / manual        | SQLite (faq_pairs) + local YAML  | All |
 | Embeddings              | Derived                    | SQLite embeddings + in-memory matrix | Rebuild on change |
 
@@ -58,15 +60,6 @@ This repository focuses on the agent & MCP layer (NOT raw telemetry ingestion—
    - Output: {events[], narrative, window_seconds, generated_at}
 3. search_corpus:
    - Input: query, top_k (default 5), scope (default all)
-   - Output: {matches:[{doc_id, score, snippet, source_type}]}
-4. driver_card:
-   - Input: driver_id or car_number
-   - Output: {driver_id, car_number, name, stats:{...}, style_tags[], updated_at}
-5. describe_gap:
-   - Input: leader_car, follower_car, window_seconds=120
-   - Output: {leader_car, follower_car, current_gap_s, trend, deltas[], reasoning}
-6. predict_pit_window (stub):
-   - Input: car_number
    - Output: {car_number, projected_window_laps:[], confidence, assumptions, disclaimer}
 7. propose_penalty (stub):
    - Input: incident_id
@@ -79,17 +72,53 @@ This repository focuses on the agent & MCP layer (NOT raw telemetry ingestion—
 - live/session_meta.json
 - cache/rolling_summary.json (latest partial summary)
 - driver/{driver_id}.json (generated on-demand)
+## 23. Increment 0.1c – Extended iRacing Data Contract (Cross‑Project)
+
+Objective: Formalize a versioned subject & JSON payload contract between the publisher (pyracing / telemetry producer) and this Agent for higher‑value race context (standings, gaps, lap timing, session state, incidents, pit events, track conditions, driver status, fuel/tire). Enables restoration of full LEADER/GAP intents, richer strategy stubs, and narrative tools.
+
 - rules/penalties.md (placeholder)
 - faq/popular.json
 
 ## 6. Director Agent Flow
-1. Receive chat message event -> classify intent (rule-based + simple keywords).
-2. Map intent to required tool calls.
-3. Call MCP tools (synchronously) – handle failures gracefully.
-4. Assemble answer; enforce length (<200 chars).
-5. (Optional) emit proposed answer for moderation; else post directly.
-6. Log answer (SQLite answers_log).
-7. Update FAQ learning counters (normalize repeated questions hashed by canonical form).
+
+Single Operational Mode (LLM Planning + Answer Synthesis):
+1. Chat message arrives (YouTube live stream context; moderate volume, high value per answer).
+2. Planner prompt (Gemini) receives tool catalog and message; returns JSON plan: [{name, arguments}].
+3. Empty / invalid plan => message ignored (noise suppression, cost control).
+4. Agent executes each allowed tool (HTTP MCP call), collecting JSON (errors represented with `{error:"tool_failed"}`).
+5. Answer prompt (Gemini) receives original message + tool result JSON; returns `{"answer": str}`.
+6. Agent enforces hard 200 char cap and returns answer; otherwise ignores.
+
+Rationale (Live Stream Focus):
+- YouTube channel chat rate is low enough that higher per‑message latency is acceptable.
+- Prioritizes authoritative, contextual answers; avoids brittle keyword heuristics.
+- Natural suppression of low‑signal chatter (no plan -> no reply) keeps stream clean.
+- Adding tools only requires updating the planner prompt (no intent routing code).
+- Safety: LLM never executes tools directly—agent validates tool names and arguments first.
+
+Configuration:
+- `LLM_PLANNER_MODEL` (env) -> `Settings.llm_planner_model` (default gemini-2.5-flash)
+- `LLM_ANSWER_MODEL` (env) -> `Settings.llm_answer_model` (default gemini-2.5-flash)
+(All prior heuristic / dual-mode flags removed.)
+
+Implementation Summary:
+- `director/agent.py`: Always performs plan -> execute -> synthesize pipeline.
+- `director/reasoning.py`: `plan_tools()` and `synthesize_answer()` using Gemini JSON responses.
+- `config/settings.py`: Provides planner + answer model names only.
+
+Error Handling & Safeguards:
+- Missing API key or failed planner call => silent ignore (prevents low-quality fallback).
+- Tool failures surfaced minimally in JSON; answer model instructed not to invent absent fields.
+- Length cap applied post-generation.
+
+Planned Enhancements:
+- Structured logging: (message, plan JSON, timings, answer) for quality iteration.
+- Rate limit + dedupe cache.
+- Optional moderation / filter pass before emission.
+
+Security Notes:
+- Only sanitized tool outputs passed to LLM.
+- Planner output filtered to registered tool names before execution.
 
 ## 7. Intent Categories (Initial Heuristics)
 | Category | Indicators | Tools |
@@ -143,17 +172,15 @@ This repository focuses on the agent & MCP layer (NOT raw telemetry ingestion—
 │       │   ├── worker.py
 │       │   └── index.py
 │       ├── mcp/
-│       │   ├── server.py
-│       │   ├── registry.py
-│       │   ├── resources.py
+│       │   ├── sdk_server.py
 │       │   └── tools/
 │       │       ├── get_live_snapshot.py
-│       │       ├── summarize_recent_events.py
 │       │       ├── search_corpus.py
-│       │       ├── driver_card.py
-│       │       ├── describe_gap.py
-│       │       ├── predict_pit_window.py
-│       │       └── propose_penalty.py
+│       │       ├── get_current_battle.py
+│       │       ├── search_chat.py
+│       │       ├── get_fastest_practice.py
+│       │       ├── get_roster.py
+│       │       └── get_session_history.py
 │       ├── director/
 │       │   ├── agent.py
 │       │   └── chat_listener_interface.py
@@ -177,10 +204,6 @@ This repository focuses on the agent & MCP layer (NOT raw telemetry ingestion—
 ├── README.md
 └── .copilot/instructions.md
 ```
-
-## 11. Initial SQLite Schema (Migration 0001)
-- incidents_flat(id TEXT PRIMARY KEY, session_id TEXT, lap INT, cars TEXT, category TEXT, severity INT, ts REAL)
-- documents(id INTEGER PRIMARY KEY AUTOINCREMENT, doc_type TEXT, session_id TEXT, chunk_idx INT, text TEXT, hash TEXT, updated_at REAL)
 - embeddings(doc_id INT PRIMARY KEY, dim INT, vector BLOB, norm REAL)
 - driver_stats(driver_id TEXT PRIMARY KEY, name TEXT, car_number INT, starts INT, wins INT, avg_finish REAL, incidents_per_hour REAL, updated_at REAL)
 - summaries(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, kind TEXT, content TEXT, created_at REAL)
@@ -194,14 +217,6 @@ All tools MUST:
 - Avoid embedding large arrays if not requested
 - Keep numeric fields normalized (seconds as float, laps integer)
 
-## 13. Logging & Metrics
-Structured JSON logs (logger name: component). Track:
-- tool.call: {tool, duration_ms, success, cache_hit, error?}
-- ingest.event: {stream, subject, seq, size_bytes, latency_ms?}
-- embeddings.update: {doc_id, dim, duration_ms}
-- director.answer: {intent, length, tools, latency_total_ms}
-
-## 14. Testing Strategy
 - Unit tests: state_cache logic, intent classification, vector similarity.
 - Integration (mock NATS): feed synthetic events & assert tool outputs stable.
 - CLI smoke: scripts/init_db.py then scripts/run_mcp.py (dry-run).
@@ -227,7 +242,6 @@ When generating code:
 3. Keep tools pure + side-effect free except reading caches.
 4. Validate tool inputs with pydantic.
 5. Provide docstrings & type hints.
-6. Avoid large synchronous JetStream pulls during tool calls (do in background).
 7. Expose an async `run_all()` orchestrator in scripts/run_mcp.py for local dev.
 
 ## 18. Minimal MVP Definition (v0.1)
@@ -339,5 +353,67 @@ Intent keyword additions: `battle`, `close`, `who's close`, `closest`. (Add to c
 
 ### 21.7 Future Step After 0.1a
 Next planned enhancement (0.1b) once publisher supplies standings snapshot: introduce true `leaderboard` tool (or upgrade `get_live_snapshot`) with ordered positions + gap seconds, enabling restoration of original LEADER / GAP intent semantics, then layer incidents/events ingestion.
+
+---
+
+## 22. Increment 0.1b – Live NATS Ingestion (Telemetry + Session + Chat)
+
+Objective: Move from synthetic / test-fed caches to live consumption of published subjects documented in `docs/nats-messages.md` – specifically `iracing.telemetry`, `iracing.session` (ephemeral) and JetStream `youtube.chat.message` – persisting chat to SQLite and updating in-memory proximity telemetry + roster for tools.
+
+### 22.1 Subjects & Handling
+| Subject | Persistence | Action |
+|---------|-------------|--------|
+| iracing.telemetry | Ephemeral | Parse JSON frame per message; extract subset fields (driver_id/display_name/CarNumber + CarDistAhead/CarDistBehind/CarNumberAhead/CarNumberBehind) and call `StateCache.upsert_telemetry_frame()` |
+| iracing.session | Ephemeral | Replace roster via `StateCache.update_roster(drivers)`; mark timestamp; may clear stale telemetry for drivers no longer present |
+| youtube.chat.message | JetStream (pull) | Already ingested via `scripts/ingest_chat.py` for persistence + FTS (`chat_messages`); additionally expose optional in-process async task variant for unified runtime |
+
+### 22.2 Adapter Implementation
+File: `src/sim_racecenter_agent/adapters/nats_listener.py`
+Responsibilities:
+1. Establish NATS connection (re-use existing `NATS_URL`).
+2. Simple core subscriptions (async callbacks) for telemetry & session subjects.
+3. Lightweight JSON parse with defensive error handling (ignore malformed frames, log once per error type per minute).
+4. Metrics counters (future) – for now, print debug lines optionally gated by `LOG_LEVEL`.
+5. Provide `run_telemetry_listener(cache: StateCache, stop_event: asyncio.Event)` coroutine.
+
+Chat ingestion remains a separate JetStream pull worker script for robustness (can run independently & backfill). Later we may embed an optional mode.
+
+### 22.3 Failure / Backoff Strategy
+* Connection loss: attempt reconnect with exponential (cap 30s). During downtime, tools keep serving last cached state.
+* Telemetry decode error: skip message; do not crash loop.
+* Session update with zero drivers: retain previous roster until a non-empty snapshot arrives (prevents flicker).
+
+### 22.4 Minimal Telemetry Field Normalization
+Incoming frame keys (see `nats-messages.md`) are more expansive; we only store:
+```
+{
+   "driver_id": frame.get("driver_id") or frame.get("display_name"),
+   "display_name": frame.get("display_name") or frame.get("driver_id"),
+   "CarNumber": frame.get("CarNumber"),
+   "CarDistAhead": frame.get("CarDistAhead"),
+   "CarDistBehind": frame.get("CarDistBehind"),
+   "CarNumberAhead": frame.get("CarNumberAhead"),
+   "CarNumberBehind": frame.get("CarNumberBehind")
+}
+```
+All other raw keys are ignored until needed by new tools.
+
+### 22.5 Director Impact
+`get_current_battle` will now reflect live proximity data. No tool schema change required.
+
+### 22.6 Acceptance Criteria (Increment 0.1b)
+| ID | Criterion |
+|----|-----------|
+| B1 | `run_mcp.py` when started with env `ENABLE_NATS=1` launches telemetry/session listener alongside MCP server. |
+| B2 | Receiving a telemetry message updates internal `_telemetry` map (verified by injecting synthetic NATS publish in test). |
+| B3 | Receiving a session snapshot replaces roster; battle tool reflects new roster size. |
+| B4 | System tolerates malformed JSON (logged, no crash). |
+| B5 | Chat ingestion script continues to persist JetStream messages (no regression). |
+| B6 | Spec documents subjects used & retained subset fields (this section). |
+
+### 22.7 Out of Scope
+* Full incident/event ingestion
+* Embedding generation
+* Advanced metrics & structured logging (placeholder print only)
 
 ---

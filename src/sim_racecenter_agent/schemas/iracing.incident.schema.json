@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pyracing.dev/schemas/iracing.incident.schema.json",
+  "title": "Incident Event",
+  "type": "object",
+  "required": ["timestamp", "car_idx", "delta", "total"],
+  "properties": {
+    "timestamp": {"type": "number"},
+    "car_idx": {"type": ["integer", "null"]},
+    "delta": {"type": "integer"},
+    "total": {"type": "integer"},
+    "team_total": {"type": ["integer", "null"]}
+  },
+  "additionalProperties": false
+}

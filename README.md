@@ -8,50 +8,75 @@ Agent + MCP layer for Sim RaceCenter: exposes race domain data (via NATS JetStre
 2. Reopen in container when prompted
 3. Initialize DB (placeholder)
 
-## MCP Transports
+## MCP Server (Official SDK)
 
-Two surfaces:
+The legacy FastAPI + custom stdio implementations have been removed. The project now uses the official Python MCP SDK (FastMCP) with a single stdio transport entrypoint.
 
-1. HTTP (FastAPI): `python -m sim_racecenter_agent.mcp.server` (endpoints `/mcp/list_tools`, `/mcp/call_tool`).
-2. Stdio JSON-RPC: `python scripts/mcp_stdio.py`.
-
-### Manual stdio usage
-
+Run (stdio transport):
 ```
-echo '{"jsonrpc":"2.0","id":1,"method":"list_tools"}' | python scripts/mcp_stdio.py
-echo '{"jsonrpc":"2.0","id":2,"method":"call_tool","params":{"name":"get_current_battle","arguments":{}}}' | python scripts/mcp_stdio.py
+python -m sim_racecenter_agent.mcp.sdk_server
 ```
 
-### VS Code Copilot Chat (experimental)
-
-Add to settings.json:
-```json
-{
-  "copilot.experimental.mcpServers": {
-    "racecenter": {
-      "command": "python",
-      "args": ["scripts/mcp_stdio.py"],
-      "transport": "stdio"
-    }
-  }
-}
+Optional streamable HTTP (adds MCP spec HTTP transport):
 ```
-Then in Copilot Chat ask: Any close battles?
-
-### Seed test data (interactive shell)
-
+python -m sim_racecenter_agent.mcp.sdk_server --transport http   # (if you wrap a small CLI)
 ```
-from sim_racecenter_agent.config.settings import get_settings
-from sim_racecenter_agent.core.state_cache import StateCache
-from sim_racecenter_agent.mcp.tools.get_current_battle import build_get_current_battle_tool
-from sim_racecenter_agent.mcp.registry import tool_registry
-s=get_settings(); cache=StateCache(s.snapshot_pos_history,s.incident_ring_size)
-tool_registry.register(**build_get_current_battle_tool(cache))
-cache.update_roster([
-  {"driver_id":"A","display_name":"Driver A","CarNumber":"11"},
-  {"driver_id":"B","display_name":"Driver B","CarNumber":"22"},
-])
-cache.upsert_telemetry_frame({"driver_id":"A","display_name":"Driver A","CarNumber":"11","CarDistAhead":9.2,"CarNumberAhead":"22"})
-cache.upsert_telemetry_frame({"driver_id":"B","display_name":"Driver B","CarNumber":"22","CarDistBehind":9.2,"CarNumberBehind":"11"})
-print(tool_registry.call("get_current_battle", {"top_n_pairs":1}))
+
+### Copilot Chat Integration
+The devcontainer already registers the server under the key `racecenter`. Open Copilot Chat and ask: *Who is leading? racecenter*.
+
+### MCP CLI Usage (Updated)
+The `--server` flag no longer exists. Use `run` (just run server) or `dev` (run with Inspector):
+
+Run with Inspector (interactive tool browser):
 ```
+mcp dev src/sim_racecenter_agent/mcp/sdk_server.py
+```
+Run plain server (stdio transport):
+```
+mcp run src/sim_racecenter_agent/mcp/sdk_server.py
+```
+Legacy JSON-RPC style manual tool listing (for quick shell test):
+```
+echo '{"jsonrpc":"2.0","id":1,"method":"list_tools"}' | python -m sim_racecenter_agent.mcp.sdk_server
+```
+Call a tool manually:
+```
+echo '{"jsonrpc":"2.0","id":2,"method":"call_tool","params":{"name":"get_current_battle","arguments":{"top_n_pairs":1}}}' | python -m sim_racecenter_agent.mcp.sdk_server
+```
+
+### Development Notes
+* Tools are registered dynamically in `sdk_server.py` by wrapping existing `build_*` factory functions.
+* Telemetry ingestion runs inside the FastMCP lifespan context.
+* Remove any remaining imports of `mcp.server` or `tool_registry` if you add new code (they were deleted).
+
+## Director Agent – Single LLM Mode
+The Director chat responder now operates ONLY in a single high‑quality LLM planning + answer mode (no heuristic / intent fallback). Every incoming chat message:
+1. Planner call (Gemini) decides which MCP tools to invoke (may return empty -> message ignored).
+2. Agent executes permitted tools and collects JSON results.
+3. Answer call (Gemini) produces a concise (<=200 chars) response using ONLY those tool results.
+4. Empty/invalid plan or missing API key => silent ignore (noise reduction, no low‑quality guesses).
+
+### Rationale
+Designed for a live racing YouTube stream with moderate chat throughput: prioritizes contextual accuracy and clarity over minimal latency or token cost.
+
+### Environment Variables
+Set before running the server (examples). Defaults in code are gemini-2.5-flash for both planner & answer; override if desired:
+```
+export GEMINI_API_KEY=your_key_here
+export LLM_PLANNER_MODEL=gemini-2.5-flash      # (default in code)
+export LLM_ANSWER_MODEL=gemini-2.5-flash       # (default in code)
+```
+If `GEMINI_API_KEY` is unset, planning returns None and messages are ignored.
+
+### Upgrading / Adding Tools
+Add a new tool implementation and ensure it is registered in `sdk_server.py`. The planner automatically sees it in the catalog (no intent routing edits required).
+
+### Deprecated
+`core/llm_intent.py` now raises on use; legacy intent / heuristic branches were removed from `director/agent.py`.
+
+### Future Enhancements (Planned)
+* Structured logging of (message, plan, execution timings, answer)
+* Rate limiting + duplicate suppression
+* Optional moderation / safety filter pass
+

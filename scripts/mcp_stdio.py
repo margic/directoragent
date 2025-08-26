@@ -1,92 +1,203 @@
 #!/usr/bin/env python
-"""MCP stdio server for Sim RaceCenter Agent.
+"""Model Context Protocol (MCP) stdio server for Sim RaceCenter Agent.
 
-Implements a minimal JSON-RPC 2.0 loop over stdin/stdout with two methods:
-- list_tools
-- call_tool (params: name:str, arguments:dict)
+Implements a subset of the MCP spec over JSON-RPC 2.0 on stdin/stdout.
 
-This mirrors the HTTP tool surface but uses stdio transport (better for local Copilot integration).
+Supported methods:
+  initialize            -> capability negotiation
+  tools/list            -> enumerate registered tools
+  tools/call            -> invoke a tool by name with arguments
+  ping                  -> simple health probe (non-spec convenience)
+
+Tool call response shape follows MCP: { content: [ { type: "json", value: <tool_result> } ] }
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import traceback
+from typing import Any, Dict
 
 from sim_racecenter_agent.config.settings import get_settings
 from sim_racecenter_agent.core.state_cache import StateCache
-from sim_racecenter_agent.mcp.registry import tool_registry
-from sim_racecenter_agent.mcp.tools.get_current_battle import build_get_current_battle_tool
-from sim_racecenter_agent.mcp.tools.get_live_snapshot import build_get_live_snapshot_tool
-from sim_racecenter_agent.mcp.tools.search_corpus import build_search_corpus_tool
-
-# Initialize cache & register tools (same as HTTP server bootstrap)
-settings = get_settings()
-cache = StateCache(settings.snapshot_pos_history, settings.incident_ring_size)
-for tool_def in [
-    build_get_live_snapshot_tool(cache),
-    build_search_corpus_tool(),
-    build_get_current_battle_tool(cache),
-]:
-    tool_registry.register(
-        name=tool_def["name"],
-        description=tool_def["description"],
-        input_schema=tool_def["input_schema"],
-        output_schema=tool_def["output_schema"],
-        handler=tool_def["handler"],
-    )
 
 
-# Helper: write JSON-RPC response
-def send(obj: dict):
-    sys.stdout.write(json.dumps(obj) + "\n")
+class _ToolRegistry:
+    def __init__(self):
+        self._tools: dict[str, dict] = {}
+
+    def register(
+        self, name: str, description: str, input_schema: dict, output_schema: dict, handler
+    ):
+        self._tools[name] = {
+            "name": name,
+            "description": description,
+            "input_schema": input_schema,
+            "output_schema": output_schema,
+            "handler": handler,
+        }
+
+    def list_tools(self):
+        return [{k: v for k, v in t.items() if k != "handler"} for t in self._tools.values()]
+
+    def call(self, name: str, arguments: dict):
+        if name not in self._tools:
+            raise ValueError(f"Unknown tool '{name}'")
+        return self._tools[name]["handler"](arguments)
+
+
+tool_registry = _ToolRegistry()
+
+from sim_racecenter_agent.mcp.tools.get_live_snapshot import build_get_live_snapshot_tool  # noqa: E402
+from sim_racecenter_agent.mcp.tools.get_current_battle import build_get_current_battle_tool  # noqa: E402
+from sim_racecenter_agent.mcp.tools.get_fastest_practice import build_get_fastest_practice_tool  # noqa: E402
+from sim_racecenter_agent.mcp.tools.search_corpus import build_search_corpus_tool  # noqa: E402
+from sim_racecenter_agent.mcp.tools.search_chat import build_search_chat_tool  # noqa: E402
+from sim_racecenter_agent.mcp.tools.get_roster import build_get_roster_tool  # noqa: E402
+from sim_racecenter_agent.mcp.tools.get_session_history import build_get_session_history_tool  # noqa: E402
+from sim_racecenter_agent.adapters.nats_listener import run_telemetry_listener  # noqa: E402
+
+
+def _stdout_write(obj: Dict[str, Any]):  # atomic-ish line write
+    sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
     sys.stdout.flush()
 
 
-# Optional notification utility
-def notify(method: str, params: dict | None = None):
-    send({"jsonrpc": "2.0", "method": method, "params": params or {}})
+async def _stdin_lines():
+    loop = asyncio.get_running_loop()
+    while True:
+        line = await loop.run_in_executor(None, sys.stdin.readline)
+        if line == "":  # EOF
+            break
+        yield line.rstrip("\n")
 
 
-# Main loop
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    try:
-        req = json.loads(line)
-    except Exception as e:
-        send({"jsonrpc": "2.0", "error": {"code": -32700, "message": f"Parse error: {e}"}})
-        continue
+async def _register_tools(cache: StateCache):
+    for tool_def in [
+        build_get_live_snapshot_tool(cache),
+        build_search_corpus_tool(),
+        build_get_current_battle_tool(cache),
+        build_search_chat_tool(),
+        build_get_fastest_practice_tool(cache),
+        build_get_roster_tool(cache),
+        build_get_session_history_tool(cache),
+    ]:
+        # Guard against double registration (idempotent)
+        name = tool_def["name"]
+        if name in tool_registry.list_tools():  # skip if already there
+            continue
+        tool_registry.register(
+            name=name,
+            description=tool_def["description"],
+            input_schema=tool_def["input_schema"],
+            output_schema=tool_def["output_schema"],
+            handler=tool_def["handler"],
+        )
 
-    _id = req.get("id")
-    method = req.get("method")
-    params = req.get("params") or {}
 
-    try:
-        if method == "list_tools":
-            result = {"tools": tool_registry.list_tools()}
-            send({"jsonrpc": "2.0", "id": _id, "result": result})
-        elif method == "call_tool":
-            name = params.get("name")
-            arguments = params.get("arguments", {})
-            if not isinstance(name, str):
-                raise ValueError("Missing or invalid 'name'")
-            res = tool_registry.call(name, arguments)
-            send({"jsonrpc": "2.0", "id": _id, "result": res})
-        elif method == "ping":
-            send({"jsonrpc": "2.0", "id": _id, "result": {"pong": True}})
-        else:
-            send(
+async def main():
+    settings = get_settings()
+    cache = StateCache(settings.snapshot_pos_history, settings.incident_ring_size)
+    await _register_tools(cache)
+
+    # Start telemetry listener in background (will keep cache filling)
+    stop_event = asyncio.Event()
+    listener_task = asyncio.create_task(run_telemetry_listener(cache, settings, stop_event))
+
+    async for raw in _stdin_lines():
+        if not raw.strip():
+            continue
+        try:
+            req = json.loads(raw)
+        except Exception as e:  # malformed JSON
+            _stdout_write(
+                {"jsonrpc": "2.0", "error": {"code": -32700, "message": f"Parse error: {e}"}}
+            )
+            continue
+        rid = req.get("id")
+        method = req.get("method")
+        params = req.get("params") or {}
+
+        try:
+            if method == "initialize":
+                _stdout_write(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": rid,
+                        "result": {
+                            "serverInfo": {"name": "sim-racecenter", "version": "0.1.0"},
+                            "capabilities": {"tools": {}},
+                        },
+                    }
+                )
+            elif method == "tools/list" or method == "list_tools":  # backward compat
+                tools_meta = []
+                for tool in tool_registry.list_tools():
+                    # tool already excludes handler
+                    tools_meta.append(
+                        {
+                            "name": tool["name"],
+                            "description": tool["description"],
+                            "inputSchema": tool["input_schema"],
+                        }
+                    )
+                # If legacy method list_tools, return simple list for tests
+                if method == "list_tools":
+                    _stdout_write({"jsonrpc": "2.0", "id": rid, "result": {"tools": tools_meta}})
+                else:
+                    _stdout_write({"jsonrpc": "2.0", "id": rid, "result": {"tools": tools_meta}})
+            elif method == "tools/call" or method == "call_tool":  # backward compat
+                name = params.get("name")
+                arguments = params.get("arguments") or {}
+                if not isinstance(name, str):
+                    raise ValueError("Tool name missing or not a string")
+                result = tool_registry.call(name, arguments)
+                # Legacy call_tool expects raw tool result at top-level result
+                if method == "call_tool":
+                    _stdout_write({"jsonrpc": "2.0", "id": rid, "result": result})
+                else:
+                    _stdout_write(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": rid,
+                            "result": {"content": [{"type": "json", "value": result}]},
+                        }
+                    )
+            elif method == "ping":  # convenience
+                _stdout_write({"jsonrpc": "2.0", "id": rid, "result": {"pong": True}})
+            else:
+                _stdout_write(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": rid,
+                        "error": {"code": -32601, "message": "Method not found"},
+                    }
+                )
+        except Exception as e:  # tool or logic failure
+            _stdout_write(
                 {
                     "jsonrpc": "2.0",
-                    "id": _id,
-                    "error": {"code": -32601, "message": "Method not found"},
+                    "id": rid,
+                    "error": {
+                        "code": -32000,
+                        "message": str(e),
+                        "data": traceback.format_exc(limit=4),
+                    },
                 }
             )
-    except Exception as e:
-        tb = traceback.format_exc(limit=2)
-        send(
-            {"jsonrpc": "2.0", "id": _id, "error": {"code": -32000, "message": str(e), "data": tb}}
-        )
+
+    # EOF received -> stop listener
+    stop_event.set()
+    try:
+        await asyncio.wait_for(listener_task, timeout=5)
+    except asyncio.TimeoutError:  # pragma: no cover
+        pass
+
+
+if __name__ == "__main__":  # pragma: no cover - integration entrypoint
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:  # graceful shutdown
+        pass

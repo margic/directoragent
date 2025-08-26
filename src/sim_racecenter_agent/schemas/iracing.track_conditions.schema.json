@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pyracing.dev/schemas/iracing.track_conditions.schema.json",
+  "title": "Track Conditions Snapshot",
+  "type": "object",
+  "required": ["timestamp"],
+  "properties": {
+    "timestamp": {"type": "number"},
+    "air_temp_c": {"type": ["number", "null"]},
+    "air_pressure_pa": {"type": ["number", "null"]},
+    "air_density": {"type": ["number", "null"]},
+    "track_temp_c": {"type": ["number", "null"]},
+    "fog_pct": {"type": ["number", "null"]},
+    "precip_pct": {"type": ["number", "null"]}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pyracing.dev/schemas/iracing.stint.schema.json",
+  "title": "Stint Metrics Snapshot (Lap Boundary)",
+  "type": "object",
+  "required": ["timestamp", "car_idx", "lap"],
+  "properties": {
+    "timestamp": {"type": "number"},
+    "car_idx": {"type": ["integer", "null"]},
+    "lap": {"type": ["integer", "null"]},
+    "fuel_level_l": {"type": ["number", "null"]},
+    "fuel_pct": {"type": ["number", "null"]},
+    "avg_fuel_lap_l": {"type": ["number", "null"]},
+    "est_laps_remaining": {"type": ["number", "null"]},
+    "stint_laps": {"type": ["integer", "null"]},
+    "tire_wear_pct": {"type": "object"}
+  },
+  "additionalProperties": false
+}

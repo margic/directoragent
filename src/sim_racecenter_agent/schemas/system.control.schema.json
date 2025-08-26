@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pyracing.dev/schemas/system.control.schema.json",
+  "title": "System Control Command",
+  "type": "object",
+  "required": ["type", "command_id", "timestamp", "data"],
+  "properties": {
+    "type": {"type": "string"},
+    "command_id": {"type": "string", "format": "uuid"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "data": {"type": "object"}
+  },
+  "additionalProperties": false
+}

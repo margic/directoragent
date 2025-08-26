@@ -9,6 +9,9 @@
     "ghcr.io/devcontainers/features/common-utils:2": {},
     "ghcr.io/devcontainers/features/python:1": {
       "version": "3.12"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
     }
   },
   "customizations": {
@@ -30,18 +33,49 @@
         "[python]": {
           "editor.defaultFormatter": "charliermarsh.ruff"
         },
-        "ruff.format.args": ["--line-length","100"]
+        "ruff.format.args": [
+          "--line-length",
+          "100"
+        ],
+        // Enable MCP for Copilot Chat and register stdio server
+        "github.copilot.chat.modelContextProtocol.enabled": true,
+        "github.copilot.chat.modelContextProtocol.serverConfigurations": {
+          "racecenter": {
+            "command": "/workspaces/directoragent/.venv/bin/python",
+            "args": [
+              "-m",
+              "sim_racecenter_agent.mcp.sdk_server"
+            ],
+            "cwd": "/workspaces/directoragent",
+            "env": {
+              "ENABLE_NATS": "1",
+              "ENABLE_LAP_TIMING": "1",
+              "ENABLE_EXTENDED_STANDINGS": "1",
+              "ENABLE_SESSION_STATE": "1",
+              "NATS_URL": "${containerEnv:NATS_URL}"
+            }
+          }
+        }
       }
     }
   },
   "containerEnv": {
     "PYTHONUNBUFFERED": "1",
     "SQLITE_PATH": "/workspace/data/agent.db",
-    "NATS_URL": "nats://nats:4222"
+    // Use the Docker network DNS name 'nats' for the NATS container
+    "NATS_URL": "nats://192.168.4.63:4222",
+    // Enable NATS ingestion & extended subjects by default
+    "ENABLE_NATS": "1",
+    "ENABLE_LAP_TIMING": "1",
+    "ENABLE_EXTENDED_STANDINGS": "1",
+    "ENABLE_SESSION_STATE": "1"
   },
   "mounts": [
     "source=sr_agent_data,target=/workspace/data,type=volume"
   ],
-  "postCreateCommand": "pip install --no-cache-dir -e .[dev] && pre-commit install",
-  "remoteUser": "vscode"
+  "postCreateCommand": "bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\" && pip install --no-cache-dir -e .[dev] && pre-commit install'",
+  "remoteUser": "vscode",
+  "runArgs": [
+    "--network=nats"
+  ]
 }
