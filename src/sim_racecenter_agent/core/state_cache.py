@@ -28,6 +28,8 @@ class StateCache:
         self._pit_events: Deque[Dict[str, Any]] = deque(maxlen=incident_ring_size)
         self._track_conditions: Dict[str, Any] | None = None
         self._stints: Dict[int, Dict[str, Any]] = {}
+        # Live chat (recent) messages (if chat ingestion enabled)
+        self._chat_messages: Deque[Dict[str, Any]] = deque(maxlen=500)
 
         # Derived helpers
         self._gap_leader_by_car: Dict[int, float | None] = {}
@@ -96,6 +98,16 @@ class StateCache:
         if car_idx is None:
             return
         self._stints[car_idx] = payload
+
+    # ---- Chat Messages ----
+    def add_chat_message(self, payload: dict):
+        """Append a validated chat message payload (already schema-checked)."""
+        self._chat_messages.append(payload)
+
+    def recent_chat(self, n: int = 50) -> list[dict]:
+        if n <= 0:
+            return []
+        return list(self._chat_messages)[-n:]
 
     # ---- Accessors ----
     def roster(self) -> list[dict]:

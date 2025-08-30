@@ -1,13 +1,16 @@
 PYTHON=python
 PACKAGE=sim_racecenter_agent
 
-.PHONY: init-db run-mcp test format lint type dev
+.PHONY: init-db agent chat-responder test format lint type
 
 init-db:
 	$(PYTHON) scripts/init_db.py
 
-run-mcp:
-	$(PYTHON) scripts/run_mcp.py
+agent:
+	$(PYTHON) scripts/run_agent.py
+
+chat-responder:
+	$(PYTHON) scripts/respond_chat.py
 
 test:
 	pytest
@@ -23,5 +26,3 @@ lint:
 
 type:
 	mypy $(PACKAGE)
-
-dev: run-mcp

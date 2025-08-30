@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 import sqlite3
 from pathlib import Path
+from sim_racecenter_agent.logging import get_logger
 
 DB_PATH = os.environ.get("SQLITE_PATH", "data/agent.db")
+_LOGGER = get_logger("init_db")
 Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 
 DDL = """
@@ -104,6 +106,34 @@ CREATE TRIGGER IF NOT EXISTS chat_messages_au AFTER UPDATE ON chat_messages BEGI
     INSERT INTO chat_messages_fts(chat_messages_fts, rowid, message, username) VALUES('delete', old.rowid, old.message, old.username);
     INSERT INTO chat_messages_fts(rowid, message, username) VALUES (new.rowid, new.message, new.username);
 END;
+-- Session-related persistence
+CREATE TABLE IF NOT EXISTS session_state_snapshots(
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL,
+    data TEXT
+);
+CREATE TABLE IF NOT EXISTS session_snapshots(
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL,
+    data TEXT
+);
+CREATE TABLE IF NOT EXISTS track_conditions_snapshots(
+    ts REAL PRIMARY KEY,
+    data TEXT
+);
+CREATE TABLE IF NOT EXISTS standings_snapshots(
+    ts REAL,
+    car_idx INT,
+    position INT,
+    car_number TEXT,
+    driver TEXT,
+    last_lap_s REAL,
+    best_lap_s REAL,
+    lap INT,
+    created_at REAL,
+    PRIMARY KEY(ts, car_idx)
+);
+CREATE INDEX IF NOT EXISTS idx_standings_snapshots_position ON standings_snapshots(position);
 """
 
 
@@ -112,7 +142,7 @@ def main():
     try:
         conn.executescript(DDL)
         conn.commit()
-        print(f"Initialized DB at {DB_PATH}")
+        _LOGGER.info("Initialized DB at %s", DB_PATH)
     finally:
         conn.close()
 

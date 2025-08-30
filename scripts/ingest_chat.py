@@ -5,13 +5,13 @@ import asyncio
 import json
 import os
 import sqlite3
+from sim_racecenter_agent.logging import get_logger
 from datetime import datetime, timezone
 
 from nats.aio.client import Client as NATS
-from nats.js.api import DeliverPolicy
 
 SQLITE_PATH = os.environ.get("SQLITE_PATH", "data/agent.db")
-NATS_URL = os.environ.get("NATS_URL", "nats://localhost:4222")
+NATS_URL = os.environ.get("NATS_URL", "nats://nats:4222")
 SUBJECT = os.environ.get("CHAT_SUBJECT", "youtube.chat.message")
 DURABLE = os.environ.get("CHAT_DURABLE", "director_chat")
 STREAM = os.environ.get("CHAT_STREAM", "CHAT")
@@ -22,6 +22,9 @@ INSERT_SQL = """
 INSERT OR IGNORE INTO chat_messages(id, username, message, avatar_url, yt_type, ts_iso, ts, day)
 VALUES(?,?,?,?,?,?,?,?)
 """
+
+
+_LOGGER = get_logger("ingest_chat")
 
 
 class ChatIngestor:
@@ -79,25 +82,33 @@ async def run():
     try:
         await js.consumer_info(STREAM, DURABLE)
     except Exception:
+        # Fallback minimal consumer config; DeliverPolicy enum may differ across versions
         await js.add_consumer(
             stream=STREAM,
             config={
                 "durable_name": DURABLE,
-                "deliver_policy": DeliverPolicy.All.value,
+                "deliver_policy": "all",  # deliver all available messages
                 "ack_policy": "explicit",
-                "ack_wait": 30_000_000_000,  # 30s
+                "ack_wait": 30_000_000_000,  # 30s in ns
                 "max_ack_pending": 1000,
             },
         )
 
-    print(f"Ingesting from {SUBJECT} durable={DURABLE} stream={STREAM}")
+    _LOGGER.info(
+        "Ingesting from %s durable=%s stream=%s batch=%s interval=%s",
+        SUBJECT,
+        DURABLE,
+        STREAM,
+        BATCH,
+        PULL_INTERVAL,
+    )
     try:
         while True:
             msgs = []
             try:
-                msgs = await js.pull(STREAM, DURABLE, batch=BATCH, timeout=PULL_INTERVAL)
+                # JetStream pull API may vary; if unavailable, this will raise and we backoff
+                msgs = await js.pull(STREAM, DURABLE, batch=BATCH, timeout=PULL_INTERVAL)  # type: ignore[attr-defined]
             except Exception:
-                # timeout / no messages
                 await asyncio.sleep(PULL_INTERVAL)
             changed = False
             for m in msgs:
@@ -107,7 +118,7 @@ async def run():
                         changed = True
                     await m.ack()
                 except Exception as e:
-                    print(f"Error processing message: {e}")
+                    _LOGGER.error("Error processing message: %s", e, exc_info=True)
                     await m.term()
             if changed:
                 ingestor.commit()

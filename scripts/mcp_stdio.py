@@ -58,6 +58,7 @@ from sim_racecenter_agent.mcp.tools.search_chat import build_search_chat_tool  #
 from sim_racecenter_agent.mcp.tools.get_roster import build_get_roster_tool  # noqa: E402
 from sim_racecenter_agent.mcp.tools.get_session_history import build_get_session_history_tool  # noqa: E402
 from sim_racecenter_agent.adapters.nats_listener import run_telemetry_listener  # noqa: E402
+import os  # noqa: E402
 
 
 def _stdout_write(obj: Dict[str, Any]):  # atomic-ish line write
@@ -102,9 +103,19 @@ async def main():
     cache = StateCache(settings.snapshot_pos_history, settings.incident_ring_size)
     await _register_tools(cache)
 
-    # Start telemetry listener in background (will keep cache filling)
+    # Start telemetry listener unless disabled (disabled by default here)
     stop_event = asyncio.Event()
-    listener_task = asyncio.create_task(run_telemetry_listener(cache, settings, stop_event))
+    # Default ON: explicitly set DISABLE_INGEST=1 to suppress telemetry listener
+    disable_ingest = os.getenv("DISABLE_INGEST", "0") == "1"
+    listener_task = None
+    if disable_ingest:
+        # print to stderr so stdout remains pure JSON-RPC responses for tests/clients
+        print(
+            "[mcp_stdio] telemetry ingestion disabled (DISABLE_INGEST=1 or default)",
+            file=sys.stderr,
+        )
+    else:
+        listener_task = asyncio.create_task(run_telemetry_listener(cache, settings, stop_event))
 
     async for raw in _stdin_lines():
         if not raw.strip():
@@ -188,12 +199,13 @@ async def main():
                 }
             )
 
-    # EOF received -> stop listener
+    # EOF received -> stop listener if running
     stop_event.set()
-    try:
-        await asyncio.wait_for(listener_task, timeout=5)
-    except asyncio.TimeoutError:  # pragma: no cover
-        pass
+    if listener_task:
+        try:
+            await asyncio.wait_for(listener_task, timeout=5)
+        except asyncio.TimeoutError:  # pragma: no cover
+            pass
 
 
 if __name__ == "__main__":  # pragma: no cover - integration entrypoint

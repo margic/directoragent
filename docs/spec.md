@@ -23,18 +23,15 @@ This repository focuses on the agent & MCP layer (NOT raw telemetry ingestion—
                                    External Clients / Tooling
 ```
 
-### Components
-- adapters.nats_listener: Subscribes to JetStream streams (INCIDENTS, POSITIONS, EVENTS, SESSIONS, SUMMARIES).
-- core.state_cache: In-memory rolling caches (leaderboard, incidents, events, position history).
-- persistence.sqlite: Thin wrapper for SQLite (documents, embeddings, incidents_flat, driver_stats, summaries, answers_log, faq_pairs).
-- embeddings.worker: Asynchronous embedding queue + in-memory vector index.
- - mcp.sdk_server: FastMCP-based official MCP SDK entrypoint (stdio + optional streamable HTTP).
- - mcp.tools: Tool handlers (get_live_snapshot, search_corpus, get_current_battle, search_chat, get_fastest_practice, get_roster, get_session_history).
-- director.chat_listener: Consumes chat events (from existing YouTube integration or future adapter).
-- director.agent: Intent classification + tool invocation + answer assembly + (optional) moderation flow.
-- config: Settings loading (env + .env) with pydantic models.
-- logging/telemetry: Structured logs + basic metrics (timings per tool call).
-- tasks: CLI utilities (bootstrap DB, run embedding backfill, debug tool call).
+### Components (Single Process Runtime)
+The agent embeds a single FastMCP server over stdio. All tools are decorator‑registered async functions in a single module for simplicity:
+   - `mcp.sdk_server`: FastMCP instance + decorated tools (`get_live_snapshot`, `get_current_battle`, `get_fastest_practice`, `get_roster`, `get_session_history`, `search_chat`, `search_corpus`).
+   - `adapters.nats_listener`: Lifespan task pushing NATS messages into the shared `StateCache`.
+   - `core.state_cache`: In‑memory race context (telemetry, standings, timing, incidents, pits, history).
+   - `director.agent`: LLM planner + tool executor (stdio MCP client only – HTTP removed).
+   - `director.chat_responder`: Consumes chat, invokes planner, publishes answers.
+
+Legacy HTTP / JSON-RPC shim code has been fully removed. Future operator UIs can attach via a separate process if needed.
 
 ## 3. Data Sources & Persistence (Phase 1)
 | Data Type              | Source          | Storage Mechanism               | Retention Strategy            |
@@ -51,19 +48,18 @@ This repository focuses on the agent & MCP layer (NOT raw telemetry ingestion—
 | Rules/FAQ               | Seed files / manual        | SQLite (faq_pairs) + local YAML  | All |
 | Embeddings              | Derived                    | SQLite embeddings + in-memory matrix | Rebuild on change |
 
-## 4. Tooling (Initial MCP Tools)
-1. get_live_snapshot:
-   - Input: optional fields list
-   - Output: {timestamp, session, leaderboard[], flags, versions}
-2. summarize_recent_events:
-   - Input: window_seconds (default 180)
-   - Output: {events[], narrative, window_seconds, generated_at}
-3. search_corpus:
-   - Input: query, top_k (default 5), scope (default all)
-   - Output: {car_number, projected_window_laps:[], confidence, assumptions, disclaimer}
-7. propose_penalty (stub):
-   - Input: incident_id
-   - Output: {incident_id, classification, recommended_penalty, precedent_ids[], disclaimer}
+## 4. Tooling (Current Decorator-Based Set)
+All tools return dicts augmented by `add_meta()` (`schema_version`, `generated_at`).
+
+1. `get_live_snapshot` – Composite snapshot: session_state, track_conditions, truncated standings & lap timing, recent incidents/pits (bounded), roster size, driver preview.
+2. `get_current_battle` – Closest proximity pairs from telemetry (inputs: `top_n_pairs`, `max_distance_m`).
+3. `get_fastest_practice` – Fastest lap & top N cars (from lap_timing or standings fallback) with gaps.
+4. `get_roster` – Condensed roster (CarIdx, car number, name) + count.
+5. `get_session_history` – Recent session_state changes (bounded `limit`).
+6. `search_chat` – FTS over ingested chat messages (optional username/day filters).
+7. `search_corpus` – Multi-scope lexical search (`rules`, `chat`) with per-scope hit counts & error map.
+
+Deferred / Removed stubs: `summarize_recent_events`, `propose_penalty` (await richer event & penalty data streams).
 
 ## 5. MCP Resources (Phase 1)
 - live/leaderboard.json
@@ -79,13 +75,13 @@ Objective: Formalize a versioned subject & JSON payload contract between the pub
 - rules/penalties.md (placeholder)
 - faq/popular.json
 
-## 6. Director Agent Flow
+## 6. Director Agent Flow (Single Process)
 
-Single Operational Mode (LLM Planning + Answer Synthesis):
+Operational Flow (LLM Planning + Answer Synthesis):
 1. Chat message arrives (YouTube live stream context; moderate volume, high value per answer).
 2. Planner prompt (Gemini) receives tool catalog and message; returns JSON plan: [{name, arguments}].
 3. Empty / invalid plan => message ignored (noise suppression, cost control).
-4. Agent executes each allowed tool (HTTP MCP call), collecting JSON (errors represented with `{error:"tool_failed"}`).
+4. Agent executes each allowed tool via in-process stdio MCP client (errors -> {error:"tool_failed"}).
 5. Answer prompt (Gemini) receives original message + tool result JSON; returns `{"answer": str}`.
 6. Agent enforces hard 200 char cap and returns answer; otherwise ignores.
 
@@ -96,15 +92,16 @@ Rationale (Live Stream Focus):
 - Adding tools only requires updating the planner prompt (no intent routing code).
 - Safety: LLM never executes tools directly—agent validates tool names and arguments first.
 
-Configuration:
+Configuration (Agent environment):
 - `LLM_PLANNER_MODEL` (env) -> `Settings.llm_planner_model` (default gemini-2.5-flash)
 - `LLM_ANSWER_MODEL` (env) -> `Settings.llm_answer_model` (default gemini-2.5-flash)
 (All prior heuristic / dual-mode flags removed.)
 
 Implementation Summary:
-- `director/agent.py`: Always performs plan -> execute -> synthesize pipeline.
-- `director/reasoning.py`: `plan_tools()` and `synthesize_answer()` using Gemini JSON responses.
-- `config/settings.py`: Provides planner + answer model names only.
+   - `scripts/run_agent.py` launches NATS ingestion + chat responder; spawns MCP stdio server automatically.
+   - `director/agent.py` performs plan -> execute -> synthesize over stdio MCP.
+   - `director/reasoning.py` supplies planning and answer prompts.
+   - `config/settings.py` centralizes model + NATS subject config.
 
 Error Handling & Safeguards:
 - Missing API key or failed planner call => silent ignore (prevents low-quality fallback).
@@ -120,15 +117,8 @@ Security Notes:
 - Only sanitized tool outputs passed to LLM.
 - Planner output filtered to registered tool names before execution.
 
-## 7. Intent Categories (Initial Heuristics)
-| Category | Indicators | Tools |
-|----------|-----------|-------|
-| LEADER / GAP | “who’s leading”, “gap”, “behind”, “interval” | get_live_snapshot (+ describe_gap if two cars named) |
-| RECENT_EVENTS | “what happened”, “last few minutes”, “miss” | summarize_recent_events |
-| DRIVER_INFO | “who is #17”, “about car 22” | driver_card |
-| STRATEGY | “pit”, “fuel”, “stop” | predict_pit_window (fallback) |
-| INCIDENT | “why crash/penalty” | search_corpus + propose_penalty (stub) |
-| GENERAL_RULE | “rules”, “penalty for” | search_corpus |
+## 7. (Deprecated) Intent Heuristic Table
+Historical heuristic routing removed. The planner LLM now selects tools solely from the catalog; no static keyword mapping remains. Table retained only for archival context.
 
 ## 8. Embeddings Strategy
 - Brute-force cosine similarity in-memory for small corpus.
@@ -144,12 +134,11 @@ Security Notes:
 | OPENAI_API_KEY | embedding API key (if using OpenAI) | (unset) |
 | EMBEDDING_MODEL | model name | text-embedding-3-small |
 | LOG_LEVEL | logging level | INFO |
-| MCP_PORT | MCP JSON-RPC over HTTP (optionally) | 8000 |
-| MCP_STDIO_ONLY | if “1” skip HTTP server | 0 |
+| MCP_SERVER_CMD | override server spawn command | (internal default) |
 | SNAPSHOT_POS_HISTORY | frames to keep | 900 |
 | INCIDENT_RING_SIZE | recent incidents | 300 |
 
-## 10. Directory Layout
+## 10. Directory Layout (Updated)
 ```
 .
 ├── .devcontainer/
@@ -172,15 +161,7 @@ Security Notes:
 │       │   ├── worker.py
 │       │   └── index.py
 │       ├── mcp/
-│       │   ├── sdk_server.py
-│       │   └── tools/
-│       │       ├── get_live_snapshot.py
-│       │       ├── search_corpus.py
-│       │       ├── get_current_battle.py
-│       │       ├── search_chat.py
-│       │       ├── get_fastest_practice.py
-│       │       ├── get_roster.py
-│       │       └── get_session_history.py
+│       │   └── sdk_server.py        # FastMCP server + all decorated tools (single file)
 │       ├── director/
 │       │   ├── agent.py
 │       │   └── chat_listener_interface.py
@@ -193,7 +174,12 @@ Security Notes:
 │   └── test_placeholder.py
 ├── scripts/
 │   ├── init_db.py
-│   └── run_mcp.py
+│   ├── run_mcp.py            # (Deprecated stub or removed)
+│   ├── run_agent.py          # Agent process (NATS ingestion + chat responder)
+│   ├── respond_chat.py       # Chat responder only
+│   ├── ingest_chat.py        # Persist chat messages into SQLite
+│   ├── ingest_sporting_code.py
+│   └── chat_tester.py        # Interactive NATS chat test client
 ├── data/ (gitignored)
 ├── pyproject.toml
 ├── requirements.txt
@@ -219,7 +205,7 @@ All tools MUST:
 
 - Unit tests: state_cache logic, intent classification, vector similarity.
 - Integration (mock NATS): feed synthetic events & assert tool outputs stable.
-- CLI smoke: scripts/init_db.py then scripts/run_mcp.py (dry-run).
+- CLI smoke: scripts/init_db.py then scripts/run_agent.py (spawns MCP stdio and answers locally).
 
 ## 15. Dev Container Goals
 - Reproducible environment with Python 3.12
@@ -242,7 +228,7 @@ When generating code:
 3. Keep tools pure + side-effect free except reading caches.
 4. Validate tool inputs with pydantic.
 5. Provide docstrings & type hints.
-7. Expose an async `run_all()` orchestrator in scripts/run_mcp.py for local dev.
+7. (Removed) Previous `run_all()` orchestrator and separate HTTP launcher scripts (now single stdio process).
 
 ## 18. Minimal MVP Definition (v0.1)
 Must include:
@@ -404,7 +390,7 @@ All other raw keys are ignored until needed by new tools.
 ### 22.6 Acceptance Criteria (Increment 0.1b)
 | ID | Criterion |
 |----|-----------|
-| B1 | `run_mcp.py` when started with env `ENABLE_NATS=1` launches telemetry/session listener alongside MCP server. |
+| B1 | HTTP + REST shim removed; stdio MCP auto-spawned inside agent. |
 | B2 | Receiving a telemetry message updates internal `_telemetry` map (verified by injecting synthetic NATS publish in test). |
 | B3 | Receiving a session snapshot replaces roster; battle tool reflects new roster size. |
 | B4 | System tolerates malformed JSON (logged, no crash). |

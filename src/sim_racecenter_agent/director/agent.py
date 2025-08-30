@@ -1,41 +1,55 @@
 from __future__ import annotations
-import httpx
-from .reasoning import plan_tools, synthesize_answer
+import os
+from sim_racecenter_agent.logging import get_logger
+from .gemini_direct import GeminiToolSession
+
+LOG = get_logger("director_agent")
 
 
 class DirectorAgent:
-    def __init__(self, mcp_base_url: str):
-        self._mcp_base_url = mcp_base_url.rstrip("/")
+    """Simplified agent: delegates all reasoning to Gemini via MCP tool session."""
+
+    def __init__(self, server_cmd: str | None = None):
+        self._answer_lock = False
+        self._gemini = GeminiToolSession(server_cmd=server_cmd or os.environ.get("MCP_SERVER_CMD"))
 
     async def answer(self, message: str) -> str | None:
-        """Plan and answer using the LLM (single operational mode)."""
+        if self._answer_lock:
+            LOG.debug("answer() overlap; dropping %r", message)
+            return None
+        self._answer_lock = True
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                tools_resp = await client.get(f"{self._mcp_base_url}/mcp/list_tools")
-                tools_resp.raise_for_status()
-                tools_meta = tools_resp.json().get("tools") or []
-        except Exception:
-            return None
-        plan = await plan_tools(message, tools_meta)
-        if not plan:
-            return None
-        results: dict[str, dict] = {}
-        for step in plan:
-            name = step.get("name")
-            if not name:
-                continue
-            args = step.get("arguments") or {}
             try:
-                results[name] = await self._call_tool(name, args)
-            except Exception:
-                results[name] = {"error": "tool_failed"}
-        answer = await synthesize_answer(message, results)
-        return answer[:200] if answer else None
+                if not self._gemini._started:
+                    LOG.info("[director_agent] starting Gemini tool session (lazy cold start)")
+                    await self._gemini.ensure_started()
+            except Exception as e:
+                LOG.error("GeminiToolSession start failed: %s", e)
+                return None
+            try:
+                answer = await self._gemini.ask(message)
+            except Exception as e:
+                LOG.error("Gemini generation failed: %s", e)
+                return None
+            return (answer or "").strip() or None
+        finally:
+            self._answer_lock = False
 
-    async def _call_tool(self, name: str, arguments: dict):
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(
-                f"{self._mcp_base_url}/mcp/call_tool", json={"name": name, "arguments": arguments}
-            )
-            resp.raise_for_status()
-            return resp.json()["result"]
+    async def close(self):
+        try:
+            await self._gemini.close()
+        except Exception:
+            pass
+        finally:
+            self._answer_lock = False
+
+    async def prewarm(self) -> int:
+        """Eagerly start Gemini + MCP and return number of tools.
+
+        Used by ChatResponder background prewarm task. Safe to call multiple times.
+        """
+        try:
+            return await self._gemini.ensure_started()
+        except Exception as e:  # pragma: no cover - best effort
+            LOG.warning("prewarm failed: %s", e)
+            return 0

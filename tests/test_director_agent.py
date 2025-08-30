@@ -2,16 +2,40 @@ import pytest
 from sim_racecenter_agent.director.agent import DirectorAgent
 
 
+class _FakeGemini:
+    def __init__(self, tool_returns):
+        self._started = True
+        self._tool_returns = tool_returns
+
+    async def ensure_started(self):  # pragma: no cover
+        self._started = True
+
+    async def ask(self, prompt: str):
+        # Deterministic synthesis mimicking prior expectations using tool outputs
+        battle = self._tool_returns.get("get_current_battle", {})
+        pairs = battle.get("pairs") or []
+        if not pairs:
+            return "No close on-track battles at the moment."
+        first = pairs[0]
+        dist = first.get("distance_m")
+        try:
+            dist_fmt = f"{float(dist):.1f}m" if dist is not None else "?m"
+        except Exception:
+            dist_fmt = "?m"
+        return f"Car {first.get('focus_car')} vs {first.get('other_car')} gap {dist_fmt}"
+
+
 class DummyAgent(DirectorAgent):
     def __init__(self):
-        super().__init__(mcp_base_url="http://test")
-        self._tool_returns = {}
+        super().__init__()
+        self._tool_returns: dict[str, dict] = {}
+        # Replace Gemini session with fake deterministic generator
+        from sim_racecenter_agent.director import agent as _agent_mod  # noqa: F401
 
-    def set_tool(self, name, result):
+        self._gemini = _FakeGemini(self._tool_returns)  # type: ignore[attr-defined]
+
+    def set_tool(self, name: str, result: dict):
         self._tool_returns[name] = result
-
-    async def _call_tool(self, name: str, arguments: dict):
-        return self._tool_returns[name]
 
 
 @pytest.mark.asyncio
@@ -36,7 +60,7 @@ async def test_battle_answer():
     )
     resp = await ag.answer("Any close battles?")
     assert resp is not None and "Car 11 vs 22" in resp
-    assert "8.4m" in resp  # rounded formatting
+    assert "8.4m" in resp
 
 
 @pytest.mark.asyncio

@@ -30,18 +30,11 @@
         "python.analysis.typeCheckingMode": "basic",
         "editor.formatOnSave": true,
         "python.formatting.provider": "none",
-        "[python]": {
-          "editor.defaultFormatter": "charliermarsh.ruff"
-        },
-        "ruff.format.args": [
-          "--line-length",
-          "100"
-        ],
         // Enable MCP for Copilot Chat and register stdio server
         "github.copilot.chat.modelContextProtocol.enabled": true,
         "github.copilot.chat.modelContextProtocol.serverConfigurations": {
           "racecenter": {
-            "command": "/workspaces/directoragent/.venv/bin/python",
+            "command": "python",
             "args": [
               "-m",
               "sim_racecenter_agent.mcp.sdk_server"
@@ -52,7 +45,9 @@
               "ENABLE_LAP_TIMING": "1",
               "ENABLE_EXTENDED_STANDINGS": "1",
               "ENABLE_SESSION_STATE": "1",
-              "NATS_URL": "${containerEnv:NATS_URL}"
+              "NATS_URL": "${containerEnv:NATS_URL}",
+              "NATS_USERNAME": "${containerEnv:NATS_USERNAME}",
+              "NATS_PASSWORD": "${containerEnv:NATS_PASSWORD}"
             }
           }
         }
@@ -60,20 +55,32 @@
     }
   },
   "containerEnv": {
+    "LOG_LEVEL": "INFO",
     "PYTHONUNBUFFERED": "1",
-    "SQLITE_PATH": "/workspace/data/agent.db",
+    "SQLITE_PATH": "/workspaces/directoragent/data/agent.db",
     // Use the Docker network DNS name 'nats' for the NATS container
     "NATS_URL": "nats://192.168.4.63:4222",
+    // Credentials (override via user secrets if needed)
+    "NATS_USERNAME": "user",
+    "NATS_PASSWORD": "pass",
+    "NATS_CONNECT_TIMEOUT": "1",
     // Enable NATS ingestion & extended subjects by default
     "ENABLE_NATS": "1",
     "ENABLE_LAP_TIMING": "1",
     "ENABLE_EXTENDED_STANDINGS": "1",
-    "ENABLE_SESSION_STATE": "1"
+    "ENABLE_SESSION_STATE": "1",
+    "ENABLE_INCIDENT_EVENTS": "1",
+    "ENABLE_PIT_EVENTS": "1",
+    "ENABLE_STINT": "1",
+    "ENABLE_TRACK_CONDITIONS": "1",
+    "ENABLE_JETSTREAM_CATCHUP": "1",
+    "DISABLE_INGEST": "0",
+    "DEFER_INGEST_INIT": "0"
   },
   "mounts": [
     "source=sr_agent_data,target=/workspace/data,type=volume"
   ],
-  "postCreateCommand": "bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\" && pip install --no-cache-dir -e .[dev] && pre-commit install'",
+  "postCreateCommand": "bash -c 'pip install --no-cache-dir -e .[dev] && pre-commit install'",
   "remoteUser": "vscode",
   "runArgs": [
     "--network=nats"

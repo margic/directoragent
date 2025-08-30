@@ -22,6 +22,7 @@ Requires-Dist: tenacity>=8.2
 Requires-Dist: httpx>=0.27
 Requires-Dist: pypdf>=4.2
 Requires-Dist: mcp[cli]>=0.2.0
+Requires-Dist: google-genai>=0.6.0
 Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Requires-Dist: pytest-asyncio; extra == "dev"
@@ -43,75 +44,164 @@ Agent + MCP layer for Sim RaceCenter: exposes race domain data (via NATS JetStre
 2. Reopen in container when prompted
 3. Initialize DB (placeholder)
 
-## MCP Server (Official SDK)
+## Test Suite Overview
 
-The legacy FastAPI + custom stdio implementations have been removed. The project now uses the official Python MCP SDK (FastMCP) with a single stdio transport entrypoint.
+Run all fast (no external service) tests:
+```
+pytest -q
+```
+Included categories:
+* Tool catalog / schema / metadata
+* StateCache basics
+* MCP stdio client lifecycle
+* Gemini session (mocked `google.genai`)
+* Context propagation (singleton test cache)
 
-Run (stdio transport):
+Live Gemini smoke (optional):
+```
+export GEMINI_API_KEY=your_key
+pytest tests/test_gemini_integration_live.py -q
+```
+Auto-skips if key or SDK missing.
+
+## MCP Server (Official SDK – stdio only)
+
+The agent uses the official Python MCP SDK (FastMCP) over a single stdio transport. All legacy HTTP / REST / JSON-RPC shim code and the prior dict-based builder pattern have been removed. Tools are declared as async functions decorated with `@mcp.tool` inside `sdk_server.py` (kept co-located for now for minimal complexity).
+
+Run standalone server for a quick manual smoke test:
 ```
 python -m sim_racecenter_agent.mcp.sdk_server
-```
-
-Optional streamable HTTP (adds MCP spec HTTP transport):
-```
-python -m sim_racecenter_agent.mcp.sdk_server --transport http   # (if you wrap a small CLI)
 ```
 
 ### Copilot Chat Integration
 The devcontainer already registers the server under the key `racecenter`. Open Copilot Chat and ask: *Who is leading? racecenter*.
 
-### MCP CLI Usage (Updated)
-The `--server` flag no longer exists. Use `run` (just run server) or `dev` (run with Inspector):
-
-Run with Inspector (interactive tool browser):
+### MCP CLI Usage
+Use `mcp dev` for an interactive Inspector or `mcp run` for plain execution:
 ```
 mcp dev src/sim_racecenter_agent/mcp/sdk_server.py
-```
-Run plain server (stdio transport):
-```
 mcp run src/sim_racecenter_agent/mcp/sdk_server.py
 ```
-Legacy JSON-RPC style manual tool listing (for quick shell test):
-```
-echo '{"jsonrpc":"2.0","id":1,"method":"list_tools"}' | python -m sim_racecenter_agent.mcp.sdk_server
-```
-Call a tool manually:
-```
-echo '{"jsonrpc":"2.0","id":2,"method":"call_tool","params":{"name":"get_current_battle","arguments":{"top_n_pairs":1}}}' | python -m sim_racecenter_agent.mcp.sdk_server
-```
+The JSON-RPC compatibility shim is gone; use the standard MCP client / Inspector.
 
 ### Development Notes
-* Tools are registered dynamically in `sdk_server.py` by wrapping existing `build_*` factory functions.
-* Telemetry ingestion runs inside the FastMCP lifespan context.
-* Remove any remaining imports of `mcp.server` or `tool_registry` if you add new code (they were deleted).
+* Tools are defined directly as decorated async functions in `sdk_server.py` (single file to reduce import ordering pitfalls). Extract to dedicated modules if the set grows.
+* Shared metadata helper `add_meta()` (in `_meta.py`) injects `schema_version` & `generated_at`.
+* Lifespan context starts the NATS telemetry listener and provides a live `StateCache` to each tool via `Context`.
+* No HTTP transport, no JSON-RPC shim, no legacy builder dicts.
+* Test mutation mode: `TEST_ENABLE_MUTATE=1` activates a singleton cache + `set_mock_state` tool (not for production).
 
-## Director Agent – Single LLM Mode
-The Director chat responder now operates ONLY in a single high‑quality LLM planning + answer mode (no heuristic / intent fallback). Every incoming chat message:
-1. Planner call (Gemini) decides which MCP tools to invoke (may return empty -> message ignored).
-2. Agent executes permitted tools and collects JSON results.
-3. Answer call (Gemini) produces a concise (<=200 chars) response using ONLY those tool results.
-4. Empty/invalid plan or missing API key => silent ignore (noise reduction, no low‑quality guesses).
+## Director Agent – Gemini Direct Tool Invocation
+The Director chat responder now delegates ALL reasoning to Gemini's built‑in MCP tool calling (no custom planner / synthesis layer). For each incoming chat message:
+1. A lazy Gemini tool session starts (if not already running) establishing an MCP stdio client session.
+2. Gemini receives the user message with the active MCP session exposed as a tool source.
+3. Gemini may invoke one or more registered MCP tools (via the protocol) and then returns a final answer.
+4. If the model chooses not to call tools or returns empty text, the message is ignored (no heuristic fallbacks).
 
-### Rationale
-Designed for a live racing YouTube stream with moderate chat throughput: prioritizes contextual accuracy and clarity over minimal latency or token cost.
+### Why This Simpler Model
+Low volume, high value queries benefit more from model autonomy and reduced bespoke prompt maintenance than from a custom planner pipeline. It eliminates:
+* Hand‑written tool planning prompts
+* Intermediate JSON plan validation
+* Separate answer synthesis step
 
 ### Environment Variables
-Set before running the server (examples). Defaults in code are gemini-2.5-flash for both planner & answer; override if desired:
+```
+export GEMINI_API_KEY=your_key_here          # REQUIRED for any responses
+export LLM_ANSWER_MODEL=gemini-2.5-flash      # Model name used by GeminiToolSession (default)
+export MCP_START_TIMEOUT=30                   # (optional) MCP client start timeout seconds
+export TEST_ENABLE_MUTATE=1                  # (tests only) enable mock mutation tool & singleton cache
+```
+If `GEMINI_API_KEY` is unset, no answers are attempted.
+
+### Adding / Modifying Tools
+Add a decorated `@mcp.tool` function in `sdk_server.py` (see below). Gemini automatically discovers it through `list_tools` – no router edits required.
+
+### Streaming
+Currently disabled; full responses are returned once complete. Enable later only if user-perceived latency becomes a concern.
+
+### Deprecated / Removed Components
+* `reasoning.py` (planner & synthesis) – removed.
+* Legacy intent / heuristic fallbacks – removed.
+* `LLM_PLANNER_MODEL` env var – no longer used.
+* Any previous JSON plan logging expectations (tests updated accordingly).
+
+### Potential Future Enhancements
+* Optional streaming partial answers
+* Guardrail / moderation pre-filter
+* Per-tool execution timing metrics
+* Caching short-lived tool results across adjacent queries
+
+## Runtime (Single stdio MCP process per Agent)
+
+The agent now always spawns an in-process FastMCP server via stdio. No HTTP shim or
+`MCP_BASE_URL` required. Start the agent:
+```
+python scripts/run_agent.py
+```
+
+Optional environment:
+```
+export GEMINI_API_KEY=...            # real LLM planning
+export MCP_SERVER_CMD="python -m sim_racecenter_agent.mcp.sdk_server"  # override default
+```
+
+Deprecated/Removed: HTTP transport, run_mcp.py, REST shim, MCP_BASE_URL configuration, builder-style tool dictionaries, JSON-RPC echo examples.
+
+### Adding a New Tool
+1. Open `src/sim_racecenter_agent/mcp/sdk_server.py`.
+2. Below the existing tool functions, add:
+   ```python
+   @mcp.tool(name="your_tool_name", description="One-line description")
+   async def your_tool(arg1: int = 5, context: Context = None):  # type: ignore[assignment]
+	   if context is not None and getattr(context, "request_context", None):
+		   cache = context.request_context.lifespan_context.cache
+	   else:
+		   # Fallback for direct/unit test invocation
+		   from sim_racecenter_agent.config.settings import get_settings
+		   from sim_racecenter_agent.core.state_cache import StateCache
+		   s = get_settings()
+		   cache = StateCache(s.snapshot_pos_history, s.incident_ring_size)
+	   result = {"arg1": arg1}
+	   return add_meta(result)
+   ```
+3. Run `pytest` – the catalog test will automatically fail if the tool is missing.
+4. Update planner prompt logic only if specialized selection guidance is needed (often unnecessary; LLM sees description).
+
+Return dictionaries; they will be serialized for the LLM. Keep outputs compact and include only relevant fields.
+
+### Tool Design Guidelines (FastMCP)
+* Declare tools with `@mcp.tool` and `async def`.
+* Accept `context: Context | None = None` (optional) so direct invocation works in tests.
+* Use `add_meta()` to inject `schema_version` & `generated_at`.
+* Avoid stdout prints; use logging (stderr) to keep MCP JSON channel clean.
+
+### Testing a New Tool
+1. Implement tool.
+2. Run `pytest -q` – catalog/metadata tests will validate registration & meta fields.
+3. Add focused tests only for complex validation or edge cases.
+
+## End-to-End Assertion (Gemini Path)
+`scripts/llm_chat_assert.py` now verifies:
+* Gemini tool session start log
+* Successful publication of an answer (`Published answer for ...`)
+
+Run:
 ```
 export GEMINI_API_KEY=your_key_here
-export LLM_PLANNER_MODEL=gemini-2.5-flash      # (default in code)
-export LLM_ANSWER_MODEL=gemini-2.5-flash       # (default in code)
+python scripts/llm_chat_assert.py
 ```
-If `GEMINI_API_KEY` is unset, planning returns None and messages are ignored.
+It will exit 0 on success.
 
-### Upgrading / Adding Tools
-Add a new tool implementation and ensure it is registered in `sdk_server.py`. The planner automatically sees it in the catalog (no intent routing edits required).
+## Troubleshooting
 
-### Deprecated
-`core/llm_intent.py` now raises on use; legacy intent / heuristic branches were removed from `director/agent.py`.
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `Context is not available outside of a request` | Tool made `context` required & called outside request wrapper | Make context optional or supply dummy arg; fallback to local cache |
+| Live Gemini test skipped | `GEMINI_API_KEY` missing or SDK not installed | Export key / `pip install google-genai` |
+| Hanging during tests | Telemetry ingest startup delay | Set `DISABLE_INGEST=1` (already in tests) |
+| Missing metadata fields | Forgot `add_meta()` | Wrap result with `add_meta(result)` |
+| `database_missing` errors | SQLite not found for search tools | Run ingestion or set `SQLITE_PATH` |
 
-### Future Enhancements (Planned)
-* Structured logging of (message, plan, execution timings, answer)
-* Rate limiting + duplicate suppression
-* Optional moderation / safety filter pass
+## FastMCP Compliance
+The server uses only official FastMCP decorators, async functions returning JSON-serializable dicts, and a lifespan context. No custom protocol extensions or legacy shims remain.
 

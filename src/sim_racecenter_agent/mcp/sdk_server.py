@@ -1,7 +1,17 @@
 from __future__ import annotations
+from sim_racecenter_agent.mcp.tools.get_session_history import build_get_session_history_tool
+from sim_racecenter_agent.mcp.tools.get_roster import build_get_roster_tool
+from sim_racecenter_agent.mcp.tools.search_chat import build_search_chat_tool
+from sim_racecenter_agent.mcp.tools.search_corpus import build_search_corpus_tool
+from sim_racecenter_agent.mcp.tools.get_fastest_practice import build_get_fastest_practice_tool
+from sim_racecenter_agent.mcp.tools.get_current_battle import build_get_current_battle_tool
+from sim_racecenter_agent.mcp.tools.get_live_snapshot import build_get_live_snapshot_tool
+from sim_racecenter_agent.mcp.tools._meta import add_meta
+from sim_racecenter_agent.adapters.nats_listener import run_telemetry_listener
+from sim_racecenter_agent.config.settings import get_settings
+from sim_racecenter_agent.core.state_cache import StateCache
 
 # ruff: noqa: E402  (intentional sys.path manipulation before imports for flexible invocation)
-
 """FastMCP-based server exposing existing tools using the official MCP SDK.
 
 Replaces the ad-hoc JSON-RPC implementations in `server.py` and `scripts/mcp_stdio.py`.
@@ -9,49 +19,52 @@ Maintains same tool names & semantics for compatibility.
 """
 
 import asyncio
-import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 import sys
 import pathlib
+import json
 
-# Ensure package root (../..) is on sys.path when invoked via file path (no package context)
 _PKG_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 
-try:  # runtime import guard (dependency added in pyproject)
+try:
     from mcp.server.fastmcp import FastMCP, Context
     from mcp.server.session import ServerSession
-except Exception:  # pragma: no cover - allows module import even if mcp not installed yet
+except Exception:  # pragma: no cover
     FastMCP = Context = ServerSession = object  # type: ignore
 
-import json
-from sim_racecenter_agent.core.state_cache import StateCache
-from sim_racecenter_agent.config.settings import get_settings
-from sim_racecenter_agent.adapters.nats_listener import run_telemetry_listener
 
-# Placeholder; real instance created in _init_server()
 mcp: FastMCP | None = None  # type: ignore[assignment]
 
 
-# Lifespan context to manage StateCache + telemetry listener
 class AppContext:
     def __init__(self, cache: StateCache, stop_event: asyncio.Event, listener_task: asyncio.Task):
         self.cache = cache
         self.stop_event = stop_event
         self.listener_task = listener_task
+        import time as _t
+
+        self.started_at = _t.time()
+
+
+_LAST_APP_CONTEXT: AppContext | None = None
 
 
 @asynccontextmanager
-async def lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:  # type: ignore[override]
+# type: ignore[override]
+async def lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:
     settings = get_settings()
     cache = StateCache(settings.snapshot_pos_history, settings.incident_ring_size)
     stop_event = asyncio.Event()
     listener_task = asyncio.create_task(run_telemetry_listener(cache, settings, stop_event))
+    ctx = AppContext(cache, stop_event, listener_task)
+    global _LAST_APP_CONTEXT
+    _LAST_APP_CONTEXT = ctx
     try:
-        yield AppContext(cache, stop_event, listener_task)
+        yield ctx
     finally:  # graceful shutdown
         stop_event.set()
         try:
@@ -59,20 +72,6 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:  # type: igno
         except asyncio.TimeoutError:  # pragma: no cover
             pass
 
-
-# Lifespan will be passed into FastMCP constructor below.
-
-# Tool adapters (reusing existing logic functions)
-from sim_racecenter_agent.mcp.tools.get_live_snapshot import build_get_live_snapshot_tool  # noqa: E402
-from sim_racecenter_agent.mcp.tools.get_current_battle import build_get_current_battle_tool  # noqa: E402
-from sim_racecenter_agent.mcp.tools.get_fastest_practice import build_get_fastest_practice_tool  # noqa: E402
-from sim_racecenter_agent.mcp.tools.search_corpus import build_search_corpus_tool  # noqa: E402
-from sim_racecenter_agent.mcp.tools.search_chat import build_search_chat_tool  # noqa: E402
-from sim_racecenter_agent.mcp.tools.get_roster import build_get_roster_tool  # noqa: E402
-from sim_racecenter_agent.mcp.tools.get_session_history import build_get_session_history_tool  # noqa: E402
-
-# Each existing build_* returns dict with handler(cache) signature -> wrap into FastMCP tool
-# We'll manually register because decorators would require rewriting handlers with signature.
 
 _existing_builders = [
     build_get_live_snapshot_tool,
@@ -86,51 +85,49 @@ _existing_builders = [
 
 
 def _register_legacy_tools():
-    """Register tools by wrapping existing builder pattern.
-
-    We defer building handlers until call-time so we can pass the live cache
-    from the lifespan context instead of constructing a placeholder cache at import time.
-    """
-
+    dummy_cache = StateCache(1, 1)
     for build in _existing_builders:
-        # Introspect whether builder expects a cache parameter
         needs_cache = build.__code__.co_argcount == 1
-        # Build once with a dummy cache only to extract static metadata (name/description/schema)
-        dummy_cache = StateCache(1, 1)
         spec = build(dummy_cache) if needs_cache else build()
         name = spec["name"]
         description = spec.get("description", name)
+        input_props_local = spec.get("input_schema", {}).get("properties", {})
+        # Simpler closure-based wrapper; no context parameter so FastMCP won't require one.
 
-        def _make(spec: dict, needs_cache: bool):  # capture loop vars
-            input_props_local = spec.get("input_schema", {}).get("properties", {})
+        def _make(active_spec: dict, needs_cache_flag: bool, input_props: dict[str, Any]):
+            # Build explicit parameter list so pydantic model doesn't create a 'kwargs' required field.
+            params = ", ".join(f"{k}: Any | None = None" for k in input_props.keys())
+            header = f"async def _wrapper({params}):" if params else "async def _wrapper():"
+            body = [
+                "    from sim_racecenter_agent.mcp.sdk_server import _LAST_APP_CONTEXT, StateCache",
+                "    cache = _LAST_APP_CONTEXT.cache if _LAST_APP_CONTEXT else StateCache(1,1)",
+                "    spec_local = build(cache) if needs_cache_flag else active_spec",
+                "    handler = spec_local['handler']",
+                "    args: dict[str, Any] = {}",
+            ]
+            for k in input_props.keys():
+                body.append(f"    if {k} is not None: args['{k}'] = {k}")
+            body.append("    return handler(args)")
+            src = "\n".join([header] + body)
+            local_ns: dict[str, Any] = {
+                "Any": Any,
+                "build": build,
+                "needs_cache_flag": needs_cache_flag,
+                "active_spec": active_spec,
+            }
+            exec(src, local_ns, local_ns)
+            fn = local_ns["_wrapper"]
+            fn.__name__ = active_spec["name"]  # type: ignore[attr-defined]
+            return fn
 
-            async def _tool(ctx: Context[ServerSession, AppContext], **kwargs: Any) -> dict:  # type: ignore[type-var]
-                cache = ctx.request_context.lifespan_context.cache
-                # Rebuild spec each call if builder uses cache (to bind fresh cache ref)
-                active_spec = build(cache) if needs_cache else spec
-                handler = active_spec["handler"]
-                args = {k: v for k, v in kwargs.items() if k in input_props_local}
-                result = handler(args)
-                if isinstance(result, dict) and "generated_at" not in result:
-                    result.setdefault(
-                        "generated_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                    )
-                return result
-
-            _tool.__name__ = spec["name"]  # type: ignore[attr-defined]
-            return _tool
-
-        tool_fn = _make(spec, needs_cache)
-        mcp.tool(name=name, description=description)(tool_fn)  # type: ignore[misc]
+        tool_fn = _make(spec, needs_cache, input_props_local)
+        if mcp is not None:
+            mcp.tool(name=name, description=description)(tool_fn)  # type: ignore[misc]
 
 
 def _init_server():
     global mcp
-    instance = FastMCP(
-        name="Sim RaceCenter",
-        instructions="Race telemetry & director tools.",
-        lifespan=lifespan,  # type: ignore[arg-type]
-    )
+    instance = FastMCP(lifespan=lifespan)  # type: ignore[arg-type]
     mcp = instance
     _register_legacy_tools()
     return instance
@@ -138,19 +135,102 @@ def _init_server():
 
 mcp = _init_server()
 
-# Entry points
+# ----------------- Additional diagnostic & persistence tools (not in legacy builders) -----------------
 
 
-def run_stdio():  # Replacement for scripts/mcp_stdio.py
+# type: ignore[misc]
+@mcp.tool(
+    name="get_operational_status",
+    description="Operational status: ingest running, cache stats, uptime",
+)
+async def get_operational_status() -> dict:
+    import time as _t
+
+    ctx = _LAST_APP_CONTEXT
+    telemetry_running = bool(ctx and ctx.listener_task and not ctx.listener_task.done())
+    # always enabled unless disabled via env (simplified)
+    telemetry_enabled = not (get_settings() and (False))
+    uptime_s = None
+    if ctx:
+        uptime_s = max(0.0, _t.time() - getattr(ctx, "started_at", _t.time()))
+        cache = ctx.cache
+    else:
+        cache = StateCache(1, 1)
+    result = {
+        "telemetry_ingest": {"enabled": telemetry_enabled, "running": telemetry_running},
+        "uptime_s": round(uptime_s, 3) if uptime_s is not None else None,
+        "cache": {
+            "roster_size": len(cache.roster()),
+            "lap_timing_records": len(cache.lap_timing()),
+            "standings_records": len(cache.standings()),
+            "has_session_state": bool(cache.session_state()),
+        },
+    }
+    return add_meta(result)
+
+
+# type: ignore[misc]
+# type: ignore[misc]
+@mcp.tool(
+    name="get_recent_chat_messages", description="Recent ingested chat messages (newest first)"
+)
+async def get_recent_chat_messages(limit: int = 25) -> dict:
+    ctx = _LAST_APP_CONTEXT
+    if not ctx:
+        result = {"messages": [], "limit": 0, "error": "no_context"}
+        return add_meta(result)
+    lim = max(1, min(int(limit), 100))
+    msgs = ctx.cache.recent_chat(lim)
+    result = {"messages": list(reversed(msgs)), "limit": lim, "count": len(msgs)}
+    return add_meta(result)
+
+
+# type: ignore[misc]
+@mcp.tool(
+    name="get_session_persistence_status",
+    description="Snapshot table row counts & latest timestamps",
+)
+async def get_session_persistence_status() -> dict:
+    import sqlite3
+    import os
+    import time as _t
+
+    settings = get_settings()
+    path = settings.sqlite_path
+    out: dict[str, object] = {"sqlite_path": path}
+    tables = [
+        "session_snapshots",
+        "session_state_snapshots",
+        "standings_snapshots",
+        "track_conditions_snapshots",
+    ]
+    if not os.path.exists(path):
+        out["error"] = "sqlite_missing"
+        return add_meta(out)
+    try:
+        conn = sqlite3.connect(path)
+        try:
+            for t in tables:
+                try:
+                    # type: ignore[misc]
+                    c, last = conn.execute(f"SELECT COUNT(*), MAX(ts) FROM {t}").fetchone()
+                    out[t] = {"count": int(c or 0), "last_ts": last}
+                except Exception:
+                    out[t] = {"count": 0, "last_ts": None, "error": "query_failed"}
+        finally:
+            conn.close()
+    except Exception as e:  # pragma: no cover
+        out["error"] = f"sqlite_open_failed:{e}"
+    out["queried_ts"] = f"{_t.time():.6f}"
+    return add_meta(out)
+
+
+def run_stdio():
     if hasattr(mcp, "run"):
-        # If incoming first line looks like legacy JSON-RPC (has method list_tools or tools/list without proper initialize),
-        # we shim minimal handling by spawning a lightweight JSON-RPC loop using existing tool handlers.
-        # Heuristic: peek first stdin line without consuming for normal FastMCP if it is a valid FastMCP initialize (contains 'initialize').
         try:
             data = sys.stdin.read()
             if data.strip():
                 lines = [ln.strip() for ln in data.splitlines() if ln.strip()]
-                # Legacy if any line has list_tools / call_tool
                 if any(json.loads(ln).get("method") in {"list_tools", "call_tool"} for ln in lines):
                     tools: dict[str, Any] = {}
                     dummy_cache = StateCache(1, 1)
@@ -232,7 +312,6 @@ def run_stdio():  # Replacement for scripts/mcp_stdio.py
                             )
                     sys.stdout.flush()
                     return
-            # No legacy trigger -> fallback to FastMCP run (no input consumed)
         except Exception:  # pragma: no cover
             pass
         mcp.run(transport="stdio")  # type: ignore[attr-defined]
@@ -247,13 +326,12 @@ def run_streamable_http():  # Optional HTTP transport
         raise RuntimeError("FastMCP not available (dependency not installed)")
 
 
-# Expose server object & run() for MCP CLI import style (e.g. 'mcp run sdk_server.py:mcp')
-server = mcp  # MCP CLI looks for .run()
+server = mcp  # MCP CLI expects .run()
 
 
-def run():  # for module-style invocation expecting a call to run()
+def run():
     mcp.run(transport="stdio")  # type: ignore[attr-defined]
 
 
-if __name__ == "__main__":  # default to stdio
+if __name__ == "__main__":
     run_stdio()

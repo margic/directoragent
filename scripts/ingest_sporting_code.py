@@ -16,6 +16,7 @@ import os
 import re
 import sqlite3
 import time
+from sim_racecenter_agent.logging import get_logger
 from pathlib import Path
 
 try:
@@ -24,6 +25,7 @@ except ImportError:  # pragma: no cover
     raise SystemExit("Missing dependency pypdf. Install with: pip install pypdf")
 
 DB_PATH = os.environ.get("SQLITE_PATH", "data/agent.db")
+_LOGGER = get_logger("ingest_sporting_code")
 
 WHITESPACE_RE = re.compile(r"\s+")
 
@@ -97,17 +99,14 @@ def ingest(path: Path, doc_type: str, chunk_size: int, overlap: int, session_id:
     # Collapse excessive newlines for chunking; keep single newlines to hint paragraphs.
     raw = re.sub(r"\n{2,}", "\n", raw)
     conn = sqlite3.connect(DB_PATH)
+    updated = 0
     try:
-        updated = 0
-        inserted = 0
         for idx, chunk in enumerate(chunk_text(raw, chunk_size, overlap)):
             changed, _doc_id = upsert_chunk(conn, doc_type, session_id, idx, chunk)
             if changed:
                 updated += 1
-            else:
-                inserted += 0  # no-op
         conn.commit()
-        print(f"Ingestion complete. chunks={idx + 1} changed={updated}")
+        _LOGGER.info("Ingestion complete. chunks=%s changed=%s", idx + 1, updated)
     finally:
         conn.close()
 
