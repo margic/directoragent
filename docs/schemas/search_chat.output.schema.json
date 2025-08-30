@@ -1,0 +1,45 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://sim-racecenter.local/schemas/search_chat.output.schema.json",
+    "title": "search_chat Output",
+    "type": "object",
+    "required": [
+        "schema_version",
+        "generated_at",
+        "query",
+        "limit",
+        "hit_count",
+        "results"
+    ],
+    "properties": {
+        "schema_version": {
+            "type": "integer",
+            "const": 1
+        },
+        "generated_at": {
+            "type": "string",
+            "format": "date-time"
+        },
+        "query": {
+            "type": "string"
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "hit_count": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object"
+            }
+        },
+        "error": {
+            "type": "string"
+        }
+    },
+    "additionalProperties": false
+}

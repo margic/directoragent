@@ -1,0 +1,52 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://sim-racecenter.local/schemas/get_fastest_practice.output.schema.json",
+    "title": "get_fastest_practice Output",
+    "type": "object",
+    "required": [
+        "schema_version",
+        "generated_at",
+        "source",
+        "fastest",
+        "top_n",
+        "count"
+    ],
+    "properties": {
+        "schema_version": {
+            "type": "integer",
+            "const": 1
+        },
+        "generated_at": {
+            "type": "string",
+            "format": "date-time"
+        },
+        "source": {
+            "type": "string",
+            "enum": [
+                "lap_timing",
+                "standings"
+            ]
+        },
+        "fastest": {
+            "anyOf": [
+                {
+                    "type": "object"
+                },
+                {
+                    "type": "null"
+                }
+            ]
+        },
+        "top_n": {
+            "type": "array",
+            "items": {
+                "type": "object"
+            }
+        },
+        "count": {
+            "type": "integer",
+            "minimum": 0
+        }
+    },
+    "additionalProperties": false
+}

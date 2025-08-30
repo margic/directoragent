@@ -1,0 +1,36 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://sim-racecenter.local/schemas/search_corpus.input.schema.json",
+    "title": "search_corpus Input",
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string"
+        },
+        "scopes": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [
+                    "rules",
+                    "chat"
+                ]
+            }
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 10
+        },
+        "top_k": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+        }
+    },
+    "required": [
+        "query"
+    ],
+    "additionalProperties": false
+}

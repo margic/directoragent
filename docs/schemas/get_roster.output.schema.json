@@ -1,0 +1,59 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://sim-racecenter.local/schemas/get_roster.output.schema.json",
+    "title": "get_roster Output",
+    "type": "object",
+    "required": [
+        "schema_version",
+        "generated_at",
+        "count",
+        "drivers"
+    ],
+    "properties": {
+        "schema_version": {
+            "type": "integer",
+            "const": 1
+        },
+        "generated_at": {
+            "type": "string",
+            "format": "date-time"
+        },
+        "count": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "drivers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "car",
+                    "name"
+                ],
+                "properties": {
+                    "CarIdx": {
+                        "type": [
+                            "integer",
+                            "null"
+                        ]
+                    },
+                    "car": {
+                        "type": [
+                            "string",
+                            "integer",
+                            "null"
+                        ]
+                    },
+                    "name": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    }
+                },
+                "additionalProperties": false
+            }
+        }
+    },
+    "additionalProperties": false
+}

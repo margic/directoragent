@@ -1,0 +1,28 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://sim-racecenter.local/schemas/search_chat.input.schema.json",
+    "title": "search_chat Input",
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string"
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 10
+        },
+        "username": {
+            "type": "string"
+        },
+        "day": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        }
+    },
+    "required": [
+        "query"
+    ],
+    "additionalProperties": false
+}

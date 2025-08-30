@@ -1,0 +1,8 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://sim-racecenter.local/schemas/get_live_snapshot.input.schema.json",
+    "title": "get_live_snapshot Input",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+}

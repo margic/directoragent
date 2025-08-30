@@ -1,0 +1,62 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://sim-racecenter.local/schemas/search_corpus.output.schema.json",
+    "title": "search_corpus Output",
+    "type": "object",
+    "required": [
+        "schema_version",
+        "generated_at",
+        "query",
+        "scopes_resolved",
+        "limit",
+        "results",
+        "hit_counts",
+        "errors"
+    ],
+    "properties": {
+        "schema_version": {
+            "type": "integer",
+            "const": 1
+        },
+        "generated_at": {
+            "type": "string",
+            "format": "date-time"
+        },
+        "query": {
+            "type": "string"
+        },
+        "scopes_resolved": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [
+                    "rules",
+                    "chat"
+                ]
+            }
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object"
+            }
+        },
+        "hit_counts": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "integer"
+            }
+        },
+        "errors": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "string"
+            }
+        }
+    },
+    "additionalProperties": false
+}

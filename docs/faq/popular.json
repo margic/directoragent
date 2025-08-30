@@ -1,0 +1,14 @@
+{
+    "_comment": "Placeholder popular FAQ pairs; to be ingested into SQLite faq_pairs table.",
+    "schema_version": 1,
+    "items": [
+        {
+            "q": "What is a close battle?",
+            "a": "Two cars within ~50 meters per telemetry proximity distances."
+        },
+        {
+            "q": "How are answers generated?",
+            "a": "LLM plans tools, executes them, then crafts a capped 200 character reply."
+        }
+    ]
+}

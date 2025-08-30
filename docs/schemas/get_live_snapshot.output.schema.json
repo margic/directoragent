@@ -1,0 +1,100 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://sim-racecenter.local/schemas/get_live_snapshot.output.schema.json",
+    "title": "get_live_snapshot Output",
+    "type": "object",
+    "required": [
+        "schema_version",
+        "generated_at",
+        "session_state",
+        "track_conditions",
+        "standings_top",
+        "leaderboard",
+        "lap_timing_top",
+        "incidents_recent",
+        "pits_recent",
+        "roster_size",
+        "drivers_preview"
+    ],
+    "properties": {
+        "schema_version": {
+            "type": "integer"
+        },
+        "generated_at": {
+            "type": "string",
+            "format": "date-time"
+        },
+        "session_state": {
+            "type": "object"
+        },
+        "track_conditions": {
+            "type": "object"
+        },
+        "standings_top": {
+            "type": "array",
+            "items": {
+                "type": "object"
+            }
+        },
+        "leaderboard": {
+            "type": "array",
+            "items": {
+                "type": "object"
+            }
+        },
+        "lap_timing_top": {
+            "type": "array",
+            "items": {
+                "type": "object"
+            }
+        },
+        "incidents_recent": {
+            "type": "array",
+            "items": {
+                "type": "object"
+            }
+        },
+        "pits_recent": {
+            "type": "array",
+            "items": {
+                "type": "object"
+            }
+        },
+        "roster_size": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "drivers_preview": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "car",
+                    "name"
+                ],
+                "properties": {
+                    "CarIdx": {
+                        "type": [
+                            "integer",
+                            "null"
+                        ]
+                    },
+                    "car": {
+                        "type": [
+                            "string",
+                            "integer",
+                            "null"
+                        ]
+                    },
+                    "name": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    }
+                }
+            }
+        }
+    },
+    "additionalProperties": false
+}

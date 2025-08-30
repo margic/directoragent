@@ -1,0 +1,15 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://sim-racecenter.local/schemas/get_fastest_practice.input.schema.json",
+    "title": "get_fastest_practice Input",
+    "type": "object",
+    "properties": {
+        "top_n": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 5
+        }
+    },
+    "additionalProperties": false
+}

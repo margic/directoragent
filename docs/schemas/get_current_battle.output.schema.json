@@ -1,0 +1,85 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://sim-racecenter.local/schemas/get_current_battle.output.schema.json",
+    "title": "get_current_battle Output",
+    "type": "object",
+    "required": [
+        "schema_version",
+        "generated_at",
+        "pairs",
+        "roster_size",
+        "emulator",
+        "top_n_requested",
+        "max_distance_m"
+    ],
+    "properties": {
+        "schema_version": {
+            "type": "integer",
+            "const": 1
+        },
+        "generated_at": {
+            "type": "string",
+            "format": "date-time"
+        },
+        "pairs": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "focus_car",
+                    "other_car",
+                    "distance_m",
+                    "relation"
+                ],
+                "properties": {
+                    "focus_car": {
+                        "type": "string"
+                    },
+                    "other_car": {
+                        "type": "string"
+                    },
+                    "distance_m": {
+                        "type": "number",
+                        "minimum": 0
+                    },
+                    "relation": {
+                        "type": "string",
+                        "enum": [
+                            "ahead",
+                            "behind"
+                        ]
+                    },
+                    "driver": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "other_driver": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    }
+                },
+                "additionalProperties": false
+            }
+        },
+        "roster_size": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "emulator": {
+            "type": "boolean"
+        },
+        "top_n_requested": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "max_distance_m": {
+            "type": "number",
+            "minimum": 0
+        }
+    },
+    "additionalProperties": false
+}

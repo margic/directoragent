@@ -1,0 +1,33 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://sim-racecenter.local/schemas/get_session_history.output.schema.json",
+    "title": "get_session_history Output",
+    "type": "object",
+    "required": [
+        "schema_version",
+        "generated_at",
+        "count",
+        "items"
+    ],
+    "properties": {
+        "schema_version": {
+            "type": "integer",
+            "const": 1
+        },
+        "generated_at": {
+            "type": "string",
+            "format": "date-time"
+        },
+        "count": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object"
+            }
+        }
+    },
+    "additionalProperties": false
+}
