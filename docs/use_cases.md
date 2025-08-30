@@ -188,6 +188,53 @@ E5: Safety filter flags potential policy violation -> log & suppress (do not att
 - Discord voice relay technical spec (auth, reconnection, latency budget) – TBD.
 - Clarify privacy / moderation considerations for voice relays (filter sensitive content).  
 
+---
+## UC-013 Corpus Content Ingestion & Index Refresh
+**Primary Actor:** System (Ingestion Worker / On-Demand CLI)  
+**Stakeholders:** Developers, AI Director Agent, Stream Audience  
+**Trigger:** (a) New or modified file placed in `content/` directory (PDF or JSON), (b) Manual CLI command (`ingest_corpus`), or (c) Scheduled periodic scan.  
+**Pre-Conditions:** `content/` directory mounted/readable; SQLite available; parsing libraries (pdfminer or pypdf) installed for PDFs.  
+**Post-Conditions:** Parsed text segments inserted/updated in `documents` (and `documents_fts`) tables with metadata enabling scoped search via `search_corpus`.  
+**Main Flow:**
+1. Detect new/changed files by hashing file bytes (SHA256) and comparing to stored `content_hash`.
+2. If unchanged -> skip.
+3. For PDF: extract text per page, normalize whitespace, segment into chunks (target 800-1000 chars, sentence boundary aware) each with `source_path`, `page`, `chunk_index`.
+4. For JSON (structured transcript/article list): iterate records; for transcript objects build a line: `[hh:mm:ss] <speaker>: <text>`; for article objects use title + paragraph text. Chunk similarly if long.
+5. Insert or replace rows in `documents` table (schema: id, source_type, source_path, page, chunk_index, content, metadata_json, content_hash, updated_at).
+6. Update FTS virtual table (`documents_fts`) with new rows; remove stale rows for files removed or hash-changed (replace strategy).
+7. Optionally (future) enqueue embeddings job for each new chunk (UC-012).
+**Extensions:**  
+E1: PDF extraction failure -> log error row (`ingest_errors`) with file & page; continue others.  
+E2: Oversized chunk (>1500 chars) -> further split while preserving sentence boundaries.  
+E3: Duplicate content across files -> allowed; retrieval will rank via bm25.  
+E4: Large batch (N > threshold) -> commit in transactions batches (e.g., 500 rows) to avoid long locks.  
+**Metrics:** Documents Indexed, Chunks Added/Updated, Ingestion Duration, Failed Chunks, Average Chunk Size, Embeddings Queue Lag (future).  
+**Components:** Ingestion Scanner, PDF Parser, JSON Normalizer, Chunker, SQLite Repository, (Future) Embeddings Worker.  
+**Open Questions:** File watch vs cron; multi-language detection & normalization; metadata schema for future citation styles.  
+
+---
+## UC-014 Document-Grounded Answering (Corpus Augmentation)
+**Primary Actor:** AI Director Agent  
+**Stakeholders:** Stream Audience, Race Director  
+**Trigger:** Viewer asks knowledge question requiring static reference (rules nuance, historical procedure, tech spec) not fully covered by dynamic telemetry.  
+**Pre-Conditions:** Corpus ingested (UC-013) and searchable via `search_corpus`; relevant query tokens present; answer generator allowed to cite source.  
+**Post-Conditions:** Published answer leverages retrieved corpus snippets and (optionally) includes a compact citation marker, staying within 200 character limit.  
+**Main Flow:**
+1. Chat message arrives; planner (or Gemini native tool selection) decides to call `search_corpus` with appropriate scopes (e.g., `rules`, `articles`, `transcripts`).
+2. Tool returns ranked snippets (bm25). Limit to top K (e.g., 3) trimmed to 250 chars each with metadata (`source_path`, `page`, `chunk_index`).
+3. Answer synthesis compresses most relevant snippet into user-facing sentence; attaches citation label like `[R1]` mapping internally to `(rules.pdf p.12)` (mapping stored for potential expansion in UI / logs, but not necessarily displayed).
+4. Answer published (<=200 chars). Logs store mapping of citations -> source metadata for audit.
+**Extensions:**  
+E1: No snippets above minimal relevance threshold -> silence or fallback “No documented info found.”  
+E2: Multiple snippets conflicting -> choose highest score; optionally mark uncertainty (“varies by series”).  
+E3: Query spans dynamic + static data (e.g., “Current leader gap and what’s the restart rule?”) -> multi-tool path: dynamic tool + `search_corpus`; merge gracefully.  
+E4: Overlength candidate answer -> iterative compression (remove citation label last only if still over).  
+**Metrics:** Corpus Answer Usage Rate, Citation Density (% answers citing), Retrieval Precision@1 (manual), Answer Length Compliance, Silence Precision (knowledge queries).  
+**Components:** `search_corpus` Tool, Answer Composer, Citation Formatter, Logging / Audit Store.  
+**Open Questions:** Automatic suggestion of follow-up reading links? Multi-citation summarization beyond 200 char cap? Display full citation in future UI instead of chat.  
+
+---
+
 ## Next Steps
 1. Assign metric owners & baseline measurement approach.
 2. Prototype rate monitor + batching (UC-102, UC-104 shared components).
