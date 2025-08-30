@@ -30,28 +30,7 @@
         "python.testing.pytestEnabled": true,
         "python.analysis.typeCheckingMode": "basic",
         "editor.formatOnSave": true,
-        "python.formatting.provider": "none",
-        // Enable MCP for Copilot Chat and register stdio server
-        "github.copilot.chat.modelContextProtocol.enabled": true,
-        "github.copilot.chat.modelContextProtocol.serverConfigurations": {
-          "racecenter": {
-            "command": "python",
-            "args": [
-              "-m",
-              "sim_racecenter_agent.mcp.sdk_server"
-            ],
-            "cwd": "/workspaces/directoragent",
-            "env": {
-              "ENABLE_NATS": "1",
-              "ENABLE_LAP_TIMING": "1",
-              "ENABLE_EXTENDED_STANDINGS": "1",
-              "ENABLE_SESSION_STATE": "1",
-              "NATS_URL": "${containerEnv:NATS_URL}",
-              "NATS_USERNAME": "${containerEnv:NATS_USERNAME}",
-              "NATS_PASSWORD": "${containerEnv:NATS_PASSWORD}"
-            }
-          }
-        }
+        "python.formatting.provider": "none"
       }
     }
   },
@@ -67,13 +46,6 @@
     "NATS_CONNECT_TIMEOUT": "1",
     // Enable NATS ingestion & extended subjects by default
     "ENABLE_NATS": "1",
-    "ENABLE_LAP_TIMING": "1",
-    "ENABLE_EXTENDED_STANDINGS": "1",
-    "ENABLE_SESSION_STATE": "1",
-    "ENABLE_INCIDENT_EVENTS": "1",
-    "ENABLE_PIT_EVENTS": "1",
-    "ENABLE_STINT": "1",
-    "ENABLE_TRACK_CONDITIONS": "1",
     "ENABLE_JETSTREAM_CATCHUP": "1",
     "ENABLE_INGEST": "1"
   },

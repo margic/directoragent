@@ -1,2 +1,0 @@
-# Optional if someone prefers pip over editable pyproject
--e .[dev]
