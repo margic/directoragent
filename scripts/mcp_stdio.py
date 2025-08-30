@@ -103,15 +103,24 @@ async def main():
     cache = StateCache(settings.snapshot_pos_history, settings.incident_ring_size)
     await _register_tools(cache)
 
-    # Start telemetry listener unless disabled (disabled by default here)
+    # Start telemetry listener unless disabled. Preferred: ENABLE_INGEST=1 to enable, 0 to disable.
     stop_event = asyncio.Event()
-    # Default ON: explicitly set DISABLE_INGEST=1 to suppress telemetry listener
-    disable_ingest = os.getenv("DISABLE_INGEST", "0") == "1"
+    env_enable = os.getenv("ENABLE_INGEST")
+    if env_enable is not None:
+        ingest_enabled = env_enable not in {"0", "false", "False"}
+    else:
+        # Backwards compatibility with DISABLE_INGEST
+        legacy_disable = os.getenv("DISABLE_INGEST", "0") == "1"
+        ingest_enabled = not legacy_disable
+        if "DISABLE_INGEST" in os.environ:
+            print(
+                "[mcp_stdio] WARNING: DISABLE_INGEST is deprecated; use ENABLE_INGEST=1 (default) or ENABLE_INGEST=0",
+                file=sys.stderr,
+            )
     listener_task = None
-    if disable_ingest:
-        # print to stderr so stdout remains pure JSON-RPC responses for tests/clients
+    if not ingest_enabled:
         print(
-            "[mcp_stdio] telemetry ingestion disabled (DISABLE_INGEST=1 or default)",
+            "[mcp_stdio] telemetry ingestion disabled (ingest_enabled=0)",
             file=sys.stderr,
         )
     else:

@@ -59,14 +59,23 @@ async def main():  # pragma: no cover
     stop_event = asyncio.Event()
     import os as _os
 
-    # Ingestion now defaults to enabled; set DISABLE_INGEST=1 to turn off.
-    disable_ingest_flag = _os.getenv("DISABLE_INGEST", "0") == "1"
+    # Ingestion enable/disable (new: ENABLE_INGEST=1|0 ; legacy: DISABLE_INGEST=1)
+    env_enable = _os.getenv("ENABLE_INGEST")
+    if env_enable is not None:
+        ingest_enabled = env_enable not in {"0", "false", "False"}
+    else:  # fallback legacy flag
+        legacy_disable = _os.getenv("DISABLE_INGEST", "0") == "1"
+        ingest_enabled = not legacy_disable
+        if "DISABLE_INGEST" in _os.environ:
+            LOG.warning(
+                "DISABLE_INGEST is deprecated; use ENABLE_INGEST=1 (default) or ENABLE_INGEST=0 to disable"
+            )
     run_telemetry = _os.getenv("RUN_TELEMETRY_LISTENER") not in {"0", "false", "False"}
     telemetry_task = None
-    if disable_ingest_flag or not run_telemetry:
+    if (not ingest_enabled) or (not run_telemetry):
         LOG.info(
-            "Telemetry listener disabled (DISABLE_INGEST=%s RUN_TELEMETRY_LISTENER=%s)",
-            disable_ingest_flag,
+            "Telemetry listener disabled (ingest_enabled=%s RUN_TELEMETRY_LISTENER=%s)",
+            ingest_enabled,
             run_telemetry,
         )
     else:
@@ -82,9 +91,10 @@ async def main():  # pragma: no cover
         LOG.info("ChatResponder disabled via DISABLE_CHAT_RESPONDER=1")
 
     LOG.info(
-        "Agent started (MCP stdio mode) NATS_URL=%s env.NATS_URL=%s telemetry=%s session=%s chat_in=%s chat_out=%s ignored_users=%s",
+        "Agent started (MCP stdio mode) NATS_URL=%s env.NATS_URL=%s ingest_enabled=%s telemetry=%s session=%s chat_in=%s chat_out=%s ignored_users=%s",
         settings.nats.url,
         _os.environ.get("NATS_URL"),
+        ingest_enabled,
         settings.nats.telemetry_subject,
         settings.nats.session_subject,
         settings.nats.chat_input_subject,
@@ -110,7 +120,8 @@ async def main():  # pragma: no cover
     loop = asyncio.get_running_loop()
     for s in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(s, _signal_handler, s, None)  # type: ignore[arg-type]
+            # type: ignore[arg-type]
+            loop.add_signal_handler(s, _signal_handler, s, None)
         except NotImplementedError:  # pragma: no cover (platforms without signal support)
             signal.signal(s, _signal_handler)
 

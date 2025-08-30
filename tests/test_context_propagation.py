@@ -6,7 +6,7 @@ from sim_racecenter_agent.mcp.client_wrapper import MCPToolClient
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_context_propagation_mutation_and_snapshot(monkeypatch):
-    monkeypatch.setenv("DISABLE_INGEST", "1")  # deterministic
+    monkeypatch.setenv("ENABLE_INGEST", "0")  # deterministic disable
     monkeypatch.setenv("TEST_ENABLE_MUTATE", "1")
     client = MCPToolClient()
     await client.start()

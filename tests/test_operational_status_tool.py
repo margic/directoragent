@@ -7,7 +7,8 @@ from sim_racecenter_agent.mcp.client_wrapper import MCPToolClient
 @pytest.mark.integration
 async def test_operational_status_basic():
     # deterministic: disable listener
-    os.environ.setdefault("DISABLE_INGEST", "1")
+    # Disable ingestion using new flag (legacy DISABLE_INGEST supported but deprecated)
+    os.environ.setdefault("ENABLE_INGEST", "0")
     client = MCPToolClient()
     try:
         await client.start()

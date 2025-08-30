@@ -149,7 +149,7 @@ async def test_chat_jetstream_persistence_and_tools(nats_setup, tmp_path):
             else {"NATS_PASSWORD": os.environ.get("NATS_PASSWORD")}
         ),
         "SQLITE_PATH": str(db_path),
-        "DISABLE_INGEST": "0",
+        "ENABLE_INGEST": "1",
         "DEFER_INGEST_INIT": "0",
         "ENABLE_CHAT": "1",
         "ENABLE_CHAT_PERSIST": "1",
@@ -258,7 +258,7 @@ async def test_iracing_incident_catchup_updates_snapshot(nats_setup):
 
     env = {
         **({} if os.environ.get("NATS_URL") else {"NATS_URL": NATS_URL}),
-        "DISABLE_INGEST": "0",
+        "ENABLE_INGEST": "1",
         "DEFER_INGEST_INIT": "0",
         "ENABLE_INCIDENT_EVENTS": "1",
         "ENABLE_JETSTREAM_CATCHUP": "1",

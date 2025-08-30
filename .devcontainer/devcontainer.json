@@ -23,7 +23,8 @@
         "charliermarsh.ruff",
         "ms-azuretools.vscode-docker",
         "GitHub.copilot",
-        "bierner.markdown-mermaid"
+        "bierner.markdown-mermaid",
+        "alexcvzz.vscode-sqlite"
       ],
       "settings": {
         "python.testing.pytestEnabled": true,
@@ -74,8 +75,7 @@
     "ENABLE_STINT": "1",
     "ENABLE_TRACK_CONDITIONS": "1",
     "ENABLE_JETSTREAM_CATCHUP": "1",
-    "DISABLE_INGEST": "0",
-    "DEFER_INGEST_INIT": "0"
+    "ENABLE_INGEST": "1"
   },
   "mounts": [
     "source=sr_agent_data,target=/workspace/data,type=volume"

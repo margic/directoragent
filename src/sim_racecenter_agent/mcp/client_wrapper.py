@@ -25,6 +25,7 @@ class MCPToolClient:
         forward_keys = [
             *[k for k in os.environ.keys() if k.startswith("NATS_")],
             *[k for k in os.environ.keys() if k.startswith("ENABLE_")],
+            # Legacy flag forwarded only if present for backward compat
             "DISABLE_INGEST",
             "TEST_ENABLE_MUTATE",
             "LOG_LEVEL",

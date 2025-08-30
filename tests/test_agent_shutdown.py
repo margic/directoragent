@@ -9,7 +9,8 @@ def test_agent_auto_stop():
     env = os.environ.copy()
     env.setdefault("GEMINI_API_KEY", "test-key")
     env["DISABLE_CHAT_RESPONDER"] = "1"  # simplify
-    env["DISABLE_INGEST"] = "1"  # no telemetry
+    # no telemetry (legacy DISABLE_INGEST deprecated)
+    env["ENABLE_INGEST"] = "0"
     env["AGENT_AUTO_STOP_SECONDS"] = "1.5"
     # Short grace timeout
     cmd = [sys.executable, "scripts/run_agent.py", "--grace-timeout", "3"]

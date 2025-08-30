@@ -36,6 +36,7 @@ async def main():
         for k, v in os.environ.items()
         if k.startswith("NATS_")
         or k.startswith("ENABLE_")
+        # legacy DISABLE_INGEST forwarded
         or k in {"LOG_LEVEL", "DISABLE_INGEST", "DEFER_INGEST_INIT"}
     }
     print(f"[handshake] spawning: {' '.join(PARTS)} env_keys={sorted(env_forward.keys())}")
